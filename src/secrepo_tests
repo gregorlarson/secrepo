@@ -1,0 +1,1192 @@
+#!/usr/bin/env python
+from __future__ import print_function
+import sys,os,hashlib,tempfile,shutil
+import secrepo as sr
+import unittest
+from subprocess import CalledProcessError
+from threading import Thread
+from StringIO import StringIO
+
+class UtilityTest(unittest.TestCase):
+   '''Utility super-class for my test-cases.
+   Provides a bunch of utility methods for temporary files,
+   and input/output redirection and leak detection.'''
+
+   def setUp(self):
+      self.junk_files = []
+      self.editor_saved=None
+      self.my_editor=None
+      self.stdin_piped = False
+      self.stdout_piped = False
+      self.read_stdout_thread=None
+      self.write_stdin_thread=None
+
+   def tearDown(self):
+      self.clean_junk()
+      if self.editor_saved:
+         os.environ['EDITOR']=self.editor_saved
+         self.editor_saved=None
+
+      self.my_editor=None
+
+      if self.read_stdout_thread:
+         self.stdio_capdone()
+
+      self.restore_stdin()
+      self.close_restore_stdout()
+
+   def clean_junk(self):
+     if self.junk_files:
+       for f in self.junk_files:
+         try:
+           os.unlink(f)
+         except OSError:
+           pass
+
+       self.junk_files=[]
+
+   def record_junk(self,fn):
+    if not fn in self.junk_files:
+      self.junk_files.append(fn)
+
+   def write_tmpfile(self,fn,s):
+     '''put some chars in file add final newline and close it'''
+
+     # Handles a filename or an os-level file number.
+     # In the case of an file-number however, it is closed
+     # and the filename is not recorded for removal.
+
+     if isinstance(fn,str):
+        self.record_junk(fn)
+        f=open(fn,"wb")
+     elif isinstance(fn,int):
+        f=os.fdopen(fn,'wb')
+
+     f.write(s)
+     f.write('\n')
+     f.close()
+
+   def new_tmpfile(self,s):
+     '''create a temp file and put some chars in it and close it.
+     No trailing newline is added.
+     Returns filename, automatically deleted after test.'''
+     (fd,name) = self.mkstemp()
+     fd.write(s)
+     fd.close()
+     return name
+
+   def pre_leaks(self):
+      self.ocount=count_open_files()
+
+   def check_leaks(self):
+      # verify that no fd were leaked
+      o = count_open_files()
+      if o != self.ocount:
+         list_open_files()
+      self.assertEquals(self.ocount,o)
+
+   def mkstemp(self):
+      '''Make a temporary file and return open (python) file handle and name.
+      File is removed automatically later.'''
+
+      (tfd,tname) = tempfile.mkstemp()
+      self.record_junk(tname)
+      return (os.fdopen(tfd,'wb'),tname)
+
+   def make_tempfile(self):
+      '''Create a temporary test file that is automatically deleted on tearDown'''
+      (tfd,tname) = tempfile.mkstemp()
+      self.record_junk(tname)
+      os.close(tfd)
+      return tname
+
+   def make_fake_editor(self):
+      '''Make a fake EDITOR that simply moves {file}.new -> {file}
+      so we can pretend the user actually edited the file.'''
+
+      if self.editor_saved: return
+
+      name=self.new_tmpfile('''#!/bin/sh
+f="$1"
+n="$f.new"
+[ -f "$n" ] && mv -f "$n" "$f"
+touch "$f"
+''')
+      # rename to something less obscure?
+
+      if 'EDITOR' in os.environ:
+         self.editor_saved=os.environ['EDITOR']
+
+      if is_windoz:
+         if 'EDITOR' in os.environ:
+            del os.environ['EDITOR']
+         sr.default_editor=['sh',name]
+      else:
+         os.environ['EDITOR']=name
+         os.chmod(name,0700)
+
+      self.my_editor=name
+
+   def fake_editor_append(self,txt):
+      '''provide some text to be appended by the fake editor'''
+      if not self.my_editor:
+         self.make_fake_editor()
+
+      fd=open(self.my_editor,'a')
+      # append to fake editor script:
+      # cat >> {file} << eof
+      # text
+      # eof
+      fd.write('cat >> "$f" << eof\n'+txt+'\neof\n')
+      fd.close()
+
+   def fake_editor_grab(self,fn):
+      '''Update fake editor to grab a copy of edited file.'''
+      if not self.editor_saved:
+         self.make_fake_editor()
+
+      fd=open(self.my_editor,'a')
+      # append to fake editor script
+      # cp -f {file} {grabfn}
+      fd.write('\ncp -f "$f" "%s"\n' % fn)
+      fd.close()
+
+   #
+   # The following utilities redirect python and os-level
+   # stdin and stdout.
+   #
+   def pipe_stdin(self):
+     '''Swap in a pipe for stdin.'''
+     if self.stdin_piped: return
+     self.stdin_piped=True
+     # discard buffered stdin data
+     # sys.stdin.flush
+     self.orig_stdin=sys.stdin
+     self.orig_stdin_fd=os.dup(0)
+     os.close(0)
+     (r,w)=os.pipe()
+     if w == 0:
+        w = os.dup(0)
+        os.close(0)
+     if r != 0:
+        os.dup2(r,0)
+        os.close(r)
+     self.write_to_stdin = w
+     sys.stdin=os.fdopen(0,"rb")
+
+   def restore_stdin(self):
+     '''Put back the original stdin'''
+     if not self.stdin_piped: return
+
+     # os.close(write_to_stdin)  assume closed?
+     sys.stdin.close()	# os.close(0)
+     os.dup2(self.orig_stdin_fd,0)
+     os.close(self.orig_stdin_fd)
+     sys.stdin = self.orig_stdin
+     self.stdin_piped=False
+
+   def pipe_stdout(self):
+      '''Swap in a pipe for stdout'''
+      if self.stdout_piped: return
+      self.stdout_piped = True
+      sys.stdout.flush()
+      self.orig_stdout=sys.stdout
+      self.orig_stdout_fd=os.dup(1)
+      os.close(1)
+      (r,w) = os.pipe()
+      if r == 1:
+         r = os.dup(1)
+         os.close(1)
+      if w != 1:
+         os.dup2(w,1)
+         os.close(w)
+      self.read_from_stdout = r
+      sys.stdout = os.fdopen(1,"wb")
+
+   def close_restore_stdout(self, rthread=None):
+     '''Close temporary stdout to provide eof to any thread reading
+        from the stdout pipe and put back the original stdout.'''
+     if not self.stdout_piped: return
+     sys.stdout.flush()
+     sys.stdout.close()	# os.close(1)
+     if rthread: rthread.join()		# finish reading thread
+
+     os.dup2(self.orig_stdout_fd,1)
+     os.close(self.orig_stdout_fd)
+     sys.stdout = self.orig_stdout
+     os.close(self.read_from_stdout)
+     self.stdout_piped=False
+
+   def write_close_stdin(self,txt):
+      'Return thread that writes final data and closes the stdin pipe.'
+      self.pipe_stdin()
+      t = Thread(target=self._write_close_stdin,args=(txt,))
+      t.setDaemon(True)
+      t.start()
+      return t
+
+   def _write_close_stdin(self,txt):
+      'This is the thread that writes data to the stdin pipe, then close it.'
+      os.write(self.write_to_stdin,txt)
+      os.close(self.write_to_stdin)
+
+   def read_stdout(self):
+      'Returns a thread that is reading stdout to a buffer.'
+      self.pipe_stdout()
+      t = Thread(target=self._read_stdout)
+      t.setDaemon(True)
+      t.start()
+      return t
+
+   def _read_stdout(self):
+      'This is the thread that reads data from the stdout pipe.'
+      self.stdout_results=''
+      more=os.read(self.read_from_stdout,32768)
+      while more:
+         self.stdout_results=self.stdout_results+more
+         more=os.read(self.read_from_stdout,32768)
+
+   def stdio_capture(self,inbuffer):
+     'Send some data to stdin, capture stdout'
+     # create thread to supply data to stdin
+     self.write_stdin_thread=self.write_close_stdin(inbuffer)
+     # create thread to record data from stdout
+     self.read_stdout_thread=self.read_stdout()
+
+   def stdio_capdone(self):
+     'Finish the capture started by stdio_capture above.'
+     # finish the thread writing to the stdin pipe
+     if self.write_stdin_thread:
+        self.write_stdin_thread.join()
+        self.write_stdin_thread=None
+
+     # finish the stdout pipe-reading thread then
+     # close and restore stdout and stdin
+     self.close_restore_stdout(self.read_stdout_thread)
+     self.read_stdout_thread=None
+
+     self.restore_stdin()
+   
+   # Note that any test_ methods added to the utility super class will
+   # be re-run with every sub-class.
+
+   #def test_stdio_cap1(self):
+   #  self.stdio_capture("some data\n")
+   #  print("some output")
+   #  for l in sys.stdin.readlines():
+   #    print("more output",l)
+   #  print("done output")
+   #  self.stdio_capdone()
+   #  print("cap1:",self.stdout_results,file=sys.stderr)
+
+#
+# End of utility classes
+# TODO: move utility classes to separate module
+#
+
+def grab_stderr():
+  'Grab secrepo stderr output, except debugging output.'
+  if isinstance(sr.stderr,StringIO):
+     # If we grab again, just discard what was there.
+     sr.stderr.close()
+  sr.stderr=StringIO()
+
+def check_stderr():
+  'Restore sr.stderr and return contents.'
+  if isinstance(sr.stderr,StringIO):
+     s = sr.stderr.getvalue()
+     sr.stderr.close()
+     sr.stderr=sys.stderr
+     return s
+
+  raise UserWarning("stderr not grabbed")
+
+def set_stdin(s):
+  'Provide input for user prompts.'
+  if isinstance(sr.user_stdin,StringIO):
+     sr.user_stdin.close()
+  sr.user_stdin=StringIO(s)
+
+def done_stdin():
+  'Restore user_stdin and return unused input.'
+  if isinstance(sr.user_stdin,StringIO):
+     s=sr.user_stdin.read()
+     sr.user_stdin.close()
+     sr.user_stdin=sys.stdin
+     return s
+
+  raise UserWarning("user_stdin not grabbed")
+
+class TestSecrepo1(UtilityTest):
+   def tearDown(self):
+      UtilityTest.tearDown(self)	#super
+      tm = self.id().split('.')[-1]	# current test method
+
+      if isinstance(sr.stderr,StringIO):
+         print("\nstderr (%s): '%s'" % (tm,check_stderr()))
+
+      if isinstance(sr.user_stdin,StringIO):
+         print("\nunused input (%s):'%s'" % (tm,done_stdin()))
+
+      self.sr_cleanup()
+
+      # Delete the test config files.
+      wipe_testconfig()
+
+   def setUp(self):
+      UtilityTest.setUp(self)		#super
+      self.sr_version=1
+
+   def sr_cleanup(self):
+      '''Cleanup sr module in preparation for next command or TC.
+      The current state is not checked. To check if previous test
+      left something, use check_clean instead (which calls this).
+      Note that the config files are left as-is, so the next command
+      can use them. Config files are removed at the end of the TC
+      (see tearDown).'''
+
+      # Drop the Gitrepo singleton
+      sr._git_instance=None
+
+      # Reset anything else in module?
+      # Hopefully nothing to do here. Perhaps call sr.module_init()
+ 
+   def check_clean(self):
+      '''Check for inconsistancies and prepare for next command.'''
+      if sr._git_instance:
+         # Detect failure to flush
+         self.assertFalse(sr._git_instance._config_changed)
+      self.sr_cleanup()
+
+   def test_edit_missing(self):
+    # Depending on which implementation I am using
+    # the exception changes, which indicates I should
+    # catch and normalize, right?
+    # CalledProcessError (external md5sum)
+    # IOError (internal implementation)
+    self.assertRaises(IOError,
+    	sr.edit_existing_file,"no such file")
+
+   def test_edit_tmpfile(self):
+    tmpfn=sr.get_tmpfile()
+    self.record_junk(tmpfn)
+
+    self.assertTrue(isinstance(tmpfn,str))
+
+   def test_edit_fstype(self):
+    tmpfn=sr.get_tmpfile()
+    self.record_junk(tmpfn)
+
+    if is_linux:
+       # This test is probably a bit non-portable.
+       # TODO: make this linux-only?
+       fstype = sr.cmd_output(['stat','-f','--format','%T',
+		os.path.dirname(tmpfn)]).strip()
+
+       self.assertEquals(fstype,"tmpfs")
+
+   def test_edit_nochange(self):
+
+    self.pre_leaks()
+    self.make_fake_editor()
+
+    tmpfn=sr.get_tmpfile()
+    self.record_junk(tmpfn)
+
+    self.write_tmpfile(tmpfn,'''
+    Save this file without changing it, then, close the editor.
+    	From:  secrepo_tests.TestSecrepo1.test_edit_nochange''')
+
+    self.assertFalse(sr.edit_existing_file(tmpfn))
+
+    self.check_leaks()
+
+   def test_edit_change(self):
+
+    self.pre_leaks()
+
+    tmpfn=sr.get_tmpfile()
+    self.record_junk(tmpfn)
+
+    self.write_tmpfile(tmpfn,'''
+    Change this file then save it and close editor.
+    	From:  secrepo_tests.TestSecrepo1.test_edit_change''')
+
+    self.fake_editor_append("This is some more text")
+
+    self.assertTrue(sr.edit_existing_file(tmpfn))
+
+    self.check_leaks()
+
+   def test_encrypt1(self):
+    (efd,ename) = self.mkstemp()	# temp file for encrypted output
+    tmpfn=sr.get_tmpfile()		# temp file for clear input
+    self.record_junk(tmpfn)
+
+    self.write_tmpfile(tmpfn,'''test_encrypt1
+    	This file will be encrypted to a temp file.''')
+
+    sr.encrypt_file_to_stream(tmpfn,self.sr_version,"test_encrypt1_key",efd)
+    # efd is closed need tp re=open it
+    efd = open(ename,'rb')
+
+    self.assertEquals(hashlib.md5(efd.read()).hexdigest(),
+    	"af5deaacf0c0f53e53cb44ff9eaf5d55")
+
+    efd.close()
+
+   def make_encrypted_testfile(self,key='testingkey',
+  	txt='This will be encrypted to a testfile.'):
+    '''Create an encrypted test-file with no header and return the names
+    of the clear-file and encrypted file.
+    File is deleted automatically at cleanup'''
+
+    clearfn = self.new_tmpfile(txt)
+
+    (enc_file,encfn) = self.mkstemp()
+
+    sr.encrypt_file_to_stream(clearfn,self.sr_version,key,enc_file)
+    enc_file.close()
+
+    return (clearfn,encfn)
+
+   def test_decrypt1(self):
+    self.pre_leaks()
+
+    (clrfile,efile)=self.make_encrypted_testfile(key='test_decrypt1_key')
+    estream=open(efile,'rb')
+    clear_fn = self.make_tempfile()
+
+    sr.decrypt_stream_to_file(estream,self.sr_version,'test_decrypt1_key',clear_fn)
+    estream.close()
+
+    self.assertEquals(sr.file_md5sum(clrfile),
+    	sr.file_md5sum(clear_fn))
+
+    self.check_leaks()
+
+   def test_decrypt2(self):
+    (clrfile,efile)=self.make_encrypted_testfile(key='test_decrypt2_key')
+    estream=open(efile,'rb')
+    clear_fn = self.make_tempfile()
+
+    # Decrypt will fail because key is wrong
+    self.assertRaises(sr.DecryptFail,
+	sr.decrypt_stream_to_file,
+		estream,self.sr_version,'test_decrypt1_key',clear_fn)
+
+    estream.close()
+
+    #shutil.copyfile(efile,'odd.encrypted')		#debug
+    #shutil.copyfile(clear_fn,'odd.decrypt')		#debug
+
+   def test_header1(self):
+      'Test reading a known good header from file.'
+      efile=open('testfile1','rb')
+      header = sr.Header(efile)
+      efile.close()
+
+      self.assertEquals(header.version, 1)
+      self.assertEquals(header.keyname,'testname1')
+      self.assertEquals(header.keyfinger,'EkUL2086jSr')
+
+   def test_header2(self):
+      'Test reading a header with bad version.'
+      efile=open('badfile1','rb')
+      self.assertRaises(sr.InvalidHeader,sr.Header,efile)
+      efile.close()
+
+   def test_header3(self):
+      'Test writing headers.'
+      self.pre_leaks()
+
+      # same as test_header1
+      efile=open('testfile1','rb')
+      header = sr.Header(efile)
+      efile.close()
+
+      # test writing exactly header size bytes
+      (ofile,ofn) = self.mkstemp()
+      header.write(ofile)
+      self.assertEquals(ofile.tell(),sr.header_size)
+      ofile.close()
+      self.assertEquals(os.path.getsize(ofn),sr.header_size)
+
+      #shutil.copyfile(ofn,'headerconf1')		#debug
+
+      # read back the header and make sure it is the same
+      h2 = sr.Header(ofn)
+      self.assertEquals(header.version,h2.version)
+      self.assertEquals(header.keyname,h2.keyname)
+      self.assertEquals(header.keyfinger,h2.keyfinger)
+
+      self.check_leaks()
+
+   def test_header_missing1(self):
+     'test reading header from file without header'
+     self.pre_leaks()
+
+     # create a temp file with no header
+     fname = self.new_tmpfile('nothing to see here.\n')
+
+     try:
+       h = sr.Header(fname)
+     except sr.InvalidHeader as e:
+       self.assertTrue(isinstance(e.args[0],str))
+
+     # verify that no fd were leaked
+     self.check_leaks()
+
+   def test_header_nofile(self):
+     # test missing file
+     try:
+       h = sr.Header("no such file")
+     except sr.InvalidHeader as e:
+       self.assertTrue(isinstance(e.args[1],IOError))
+
+   def test_header_closed(self):
+     # test closed stream
+     (tfile,fname) = self.mkstemp()
+     tfile.write('nothing to see here.')
+     tfile.close()
+     try:
+       h = sr.Header(tfile)
+     except sr.InvalidHeader as e:
+       self.assertTrue(isinstance(e.args[1],ValueError))
+
+   def test_header_truncated_v(self):
+     # test truncated version
+     (tfile,fname) = self.mkstemp()
+     tfile.write('v           ')
+     tfile.close()
+     self.pre_leaks()
+     try:
+       h = sr.Header(fname)
+     except sr.InvalidHeader as e:
+       self.assertTrue(isinstance(e.args[0],str))
+
+     self.check_leaks()
+
+   def test_header_truncated_k(self):
+     # test truncated keytag
+     (tfile,fname) = self.mkstemp()
+     tfile.write('v 1\nk           ')
+     tfile.close()
+     try:
+       h = sr.Header(fname)
+     except sr.InvalidHeader as e:
+       self.assertTrue(isinstance(e.args[0],str))
+
+   def test_write_encrypted1(self):
+     self.pre_leaks()
+
+     h = sr.Header(version=self.sr_version,keyname='bob',key='testkey')
+     (efd,ename) = self.mkstemp()
+     h.write(efd)
+     clearname = self.new_tmpfile('''This is some text to encrypt
+     	test_write_encrypted1\n''')
+     sr.encrypt_file_to_stream(clearname,self.sr_version,'testkey',efd)
+     efd.close()
+
+     #shutil.copyfile(ename,'encrypted1')	#debug
+
+     h = sr.Header(ename)
+     self.assertEquals(h.version,self.sr_version)
+     self.assertEquals(h.keyname,'bob')
+     self.assertEquals(h.keyfinger,'4UCnSGAJGfI')
+
+     # Try reading again using raw
+     efd = open(ename,'rb')
+     h = sr.Header(efd)
+     self.assertEquals(h.version,self.sr_version)
+     self.assertEquals(h.keyname,'bob')
+     self.assertEquals(h.keyfinger,'4UCnSGAJGfI')
+
+     self.assertEquals(efd.tell(),sr.header_size)
+
+     os.unlink(clearname)
+     self.assertFalse(os.path.isfile(clearname))
+
+     sr.decrypt_stream_to_file(efd,h.version,'testkey',clearname)
+     efd.close()
+
+     #shutil.copyfile(clearname,'decrypted1')	#debug
+     clear_fd=open(clearname,'r')
+     clear_fd.read().index('test_write_encrypted1')
+     clear_fd.close()
+
+     # Try once more, this time using a fileno instead of buffered
+     efd = os.open(ename,os.O_RDONLY)
+
+     h = sr.Header(efd)
+     self.assertEquals(h.version,self.sr_version)
+     self.assertEquals(h.keyname,'bob')
+     self.assertEquals(h.keyfinger,'4UCnSGAJGfI')
+
+     self.assertEquals(os.lseek(efd,0,1),sr.header_size)
+
+     os.unlink(clearname)
+     self.assertFalse(os.path.isfile(clearname))
+
+     sr.decrypt_stream_to_file(efd,h.version,'testkey',clearname)
+     os.close(efd)
+
+     clear_fd=open(clearname,'r')
+     clear_fd.read().index('test_write_encrypted1')
+     clear_fd.close()
+
+     self.check_leaks()
+
+   def test_edit_encrypted1(self):
+      infile='testfile1'	# password is testingkey1, key name is testname1
+      self.pre_leaks()
+
+      workfile=infile+'.work'
+      self.record_junk(workfile)
+      shutil.copyfile(infile,workfile)
+
+      sr.os_environ['SRK_1'] = 'testingkey1'
+      # no name
+
+      grab_clear=self.make_tempfile()
+
+      self.fake_editor_grab(grab_clear)
+      # no changes
+      self.assertFalse(sr.sredit_encrypted(workfile))
+      #shutil.copyfile(workfile,'workfile1')	#debug
+      #shutil.copyfile(grab_clear,'clear_v2')	#debug
+
+      clear_fd=open(grab_clear,'rb')
+      clear_fd.read().index('testfile1')
+      clear_fd.close()
+
+      self.fake_editor_append('test_edit_encrypted1 more text')
+      self.assertTrue(sr.sredit_encrypted(workfile))
+
+      ##shutil.copyfile(workfile,'workfile2')	#debug
+
+      # try re-reading using fileno instead of buffered stream
+      enc_fileno = os.open(workfile,sr.os_read)
+      header=sr.Header(enc_fileno)
+      self.assertEquals(header.version,self.sr_version)
+      self.assertEquals(header.keyname,'testname1')
+      self.assertEquals(os.lseek(enc_fileno,0,1),sr.header_size)
+      buf=os.read(enc_fileno,32768)
+      ##print("len: %d" % len(buf),file=sys.stderr)	# debug
+      self.assertEquals(len(buf) % 16,0)
+      os.lseek(enc_fileno,sr.header_size,0)		# rewind to end of header
+
+      clear_name=self.make_tempfile()
+      sr.decrypt_stream_to_file(enc_fileno,self.sr_version,'testingkey1',clear_name)
+      os.close(enc_fileno)
+
+      #shutil.copyfile(clear_name,'decrypt3')	#debug
+
+      clear_fd=open(clear_name,'rb')
+      clear_fd.read().index('test_edit_encrypted1')
+      clear_fd.close()
+
+      # try re-reading using bad key
+      enc_fileno = os.open(workfile,sr.os_read)
+      header=sr.Header(enc_fileno)
+      self.assertEquals(header.version,self.sr_version)
+      self.assertEquals(header.keyname,'testname1')
+      self.assertEquals(header.keyfinger,'EkUL2086jSr')
+
+      clear_name=self.make_tempfile()
+      self.assertRaises(sr.DecryptFail,
+      	sr.decrypt_stream_to_file,enc_fileno,self.sr_version,'badkey',clear_name)
+
+      os.close(enc_fileno)
+
+      self.check_leaks()
+
+   def test_git1(self):
+      gr = sr.Gitrepo()
+      self.assertTrue(os.path.isfile(os.path.join(gr.git_dir,'HEAD')))
+
+   # Note that tests running *_cmd produce stderr output.
+   #  - this will output junk to the terminal
+   #  - sr.stderr can be changed to avoid this.
+   #
+   def test_del_new_cmds(self):
+      self.pre_leaks()
+      if not sr.git().get_keys():
+         # need at least one key
+         sr.git().set_key('tempkey','dummy')
+
+      grab_stderr()
+      set_stdin('YES\n')
+      sr.secrepo_cmd(['delall'])
+      check_stderr()
+      self.assertFalse(sr.git().get_keys())
+      self.assertEquals(done_stdin(),'')
+
+      self.check_clean()
+      # Try re-reading config from srconfig
+      self.assertFalse(sr.git().get_keys())
+
+      grab_stderr()
+      sr.secrepo_cmd(['new','dummyname'])
+      lkeys = sr.git().get_keys()
+      self.assertEquals(1,len(lkeys))
+      check_stderr()
+
+      self.check_clean()	# check flush
+
+      # Check that this key is now default
+      self.assertEquals(lkeys[sr.git().get_encryption_key()],'dummyname')
+
+      self.check_leaks()
+
+   def setup_delall(self):
+      'utility delete all keys'
+      grab_stderr()
+      set_stdin('YES\n')
+      sr.secrepo_cmd(['delall'])
+      check_stderr()
+      done_stdin()
+      self.check_clean()
+
+   def test_add_del_cmds(self):
+      'Test secrepo add command'
+      self.pre_leaks()
+      self.setup_delall()
+
+      grab_stderr()
+      set_stdin('newkeyvalue\n')
+      sr.secrepo_cmd(['add','newname1'])
+      self.assertEquals(done_stdin(),'')
+      check_stderr()
+      lkeys = sr.git().get_keys()
+      self.assertEquals(1,len(lkeys))
+      self.check_clean()
+
+      # Check that this key is now default
+      self.assertEquals(lkeys[sr.git().get_encryption_key()],'newname1')
+
+      # add same key again with different name.
+      grab_stderr()
+      set_stdin('newkeyvalue\n')
+      sr.secrepo_cmd(['add','newname2'])
+      self.assertEquals(done_stdin(),'')
+      check_stderr().index("from 'newname1' to 'newname2'")
+      lkeys = sr.git().get_keys()
+      self.assertEquals(1,len(lkeys))
+      self.check_clean()
+
+      # Check that newname2 appears
+      self.assertEquals(len(sr.git().get_keys_named('newname2')), 1)
+
+      # Add another key with same name.
+      grab_stderr()
+      set_stdin('whatever\n')
+      sr.secrepo_cmd(['add','newname2'])
+      self.assertEquals(done_stdin(),'')
+      check_stderr().index('already')
+      lkeys = sr.git().get_keys()
+      self.assertEquals(2,len(lkeys))
+
+      self.check_clean()
+
+      grab_stderr()
+      sr.secrepo_cmd(['new','dummyname'])
+      check_stderr()
+      lkeys = sr.git().get_keys()
+      self.assertEquals(3,len(lkeys))
+      self.check_clean()
+
+      # Check that newname2 appears twice
+      self.assertEquals(len(sr.git().get_keys_named('newname2')), 2)
+
+      # Delete one of the keys
+      set_stdin('YES\n')
+      grab_stderr()
+      sr.secrepo_cmd(['del','Sm+WDK3hrC3'])	# del whatever
+      self.assertEquals(done_stdin(),'')
+      check_stderr().index('Removing')
+      lkeys = sr.git().get_keys()
+      self.assertEquals(2,len(lkeys))
+      self.check_clean()
+
+      # Check that newname2 appears once still
+      self.assertEquals(len(sr.git().get_keys_named('newname2')), 1)
+      # Check the default key is still there.
+      self.assertTrue(sr.git().get_encryption_key())
+
+      # delete the local encryption key
+      set_stdin('YES\n')
+      grab_stderr()
+      sr.secrepo_cmd(['del','y3ZgVvZSl0D'])		# del newkeyvalue
+      self.assertEquals(done_stdin(),'')
+      # user is notified that default is being removed.
+      check_stderr().index('default key')
+      lkeys = sr.git().get_keys()
+      self.assertTrue(len(lkeys),1)
+      self.check_clean()
+
+      self.check_leaks()
+     
+   def test_lookups1(self):
+      'Test key lookup commands and environment.'
+      self.pre_leaks()
+      self.setup_delall()
+
+      # add some keys to environment, some with names
+      # Even though the environment variables are upper-case
+      # os.environ still corrupts the values somehow, so
+      # we need to use nt.environ (sr.os_environ)
+      #
+      ev=sr.os_environ
+      ev['SRK_1'] = 'ltesta1key'
+      ev['SRN_1'] = 'env1name'
+      ev['SRK_2'] = 'ltesta2key'
+      ev['SRN_2'] = 'env2name'
+      ev['SRK_3'] = 'ltestb3key'	# no name
+      if 'SRN_3' in ev: del ev['SRN_3']
+      ev['SRK_4'] = 'ltestb4key'
+      ev['SRN_4'] = 'env4name'
+      ev['SRK_5'] = 'anotherkey4'
+      ev['SRN_5'] = 'env4name'
+
+      # add some keys to local
+      gr=sr.git()
+      gr.set_key('ltesta1key','repo1name')
+      gr.set_key('ltesta2key','repo1name')
+      gr.set_key('ltesta3key','repo3name')
+      gr.set_key('ltesta4key','repo4name')
+      gr.set_key('ltestb1key','repo1name')
+      gr.set_key('ltestb2key','repo2name')
+      gr.set_key('ltestb3key','repo3name')
+      gr.set_key('ltestb4key','repo4name')
+
+      # output readability test
+      #sr.secrepo_cmd(['new','newkey'])
+      #print("\nkeys:")
+      #sr.secrepo_cmd(['-l'])
+
+      # test lookup by finger-print (local keys)
+      self.assertEquals(len(gr.get_keys_matching('oPF11G2LzaH')),1)	# ltesta3key
+      self.assertEquals(len(gr.get_keys_matching('ltesx')),0)
+      # test lookup by finger-print (env keys)
+      self.assertEquals(len(sr.env_keys_matching('DZfiQq8ic3k')),1)	# ltestb3key
+      self.assertEquals(len(sr.env_keys_matching('ltesx')),0)
+
+      # test lookup by name (local keys)
+      self.assertEquals(len(gr.get_keys_matching('repo1name')),3)
+      self.assertEquals(len(gr.get_keys_matching('repo2name')),1)
+      self.assertEquals(len(gr.get_keys_matching('repo3name')),2)
+      # test lookup by name (env keys)
+      self.assertEquals(len(sr.env_keys_matching('env4name')),2)
+      self.assertEquals(len(sr.env_keys_matching('env2name')),1)
+      self.assertEquals(len(sr.env_keys_matching('envxname')),0)
+
+      # Try some key finding based on finger-print.
+      dk=gr.find_decryption_key
+      self.assertEquals(dk('FwWOFulik4J','tbd'),'ltestb2key')
+      self.assertEquals(dk('qadmlwWro5f','tbd'),'anotherkey4')
+
+      dk=None
+      gr.flush_config()
+      gr=None
+      self.check_clean()
+
+      # See that local keys can be restored from config.
+      gr=sr.git()
+      lkeys=gr.get_keys()
+      self.assertEquals(len(lkeys),8)
+
+      # Check that default key can be set to a local key, but not other keys.
+      ek=gr.get_encryption_key()
+      gr.set_default_key('ltesta3key')		# by whole key
+      self.assertEquals(sr.secrepo_cmd(['default','DZfiQq8ic3k']),0)	# by fp ltestb3key
+      self.assertEquals(gr.get_encryption_key(),'ltestb3key')
+      self.assertEquals(sr.secrepo_cmd(['default','repo2name']),0)	# uniq key name
+      self.assertEquals(gr.get_encryption_key(),'ltestb2key')
+
+      # Cannot assign default key that does not exist.
+      self.assertRaises(sr.SrException,gr.set_default_key,'ltestb2keys')
+
+      # Cannot assign default key that is only in environ
+      self.assertRaises(sr.SrException,gr.set_default_key,'anotherkey4')
+
+      self.check_leaks()
+
+   def test_sr_env(self):
+      '''basic test of git-secrepo env'''
+      self.pre_leaks()
+      # env slots are filled in order, so make a space at 2
+      ev = sr.os_environ
+      ev['SRK_1']='envinuse'
+      if 'SRK_2' in ev:
+         del ev['SRK_2']
+      if 'SRK_3' in ev:
+         del ev['SRK_3']
+
+      grab_stderr()
+      self.stdio_capture('newenvkey1\nnewenvkey2 newname2')
+      sr.secrepo_cmd(['env'])
+      sr.secrepo_cmd(['env'])
+      self.stdio_capdone()
+      self.stdout_results.index("export SRK_2='newenvkey1';")
+      self.stdout_results.index("export SRK_2='newenvkey2';")
+      self.stdout_results.index("export SRN_2='newname2';")
+      self.stdout_results.index("unset SRN_2;")
+      check_stderr()
+
+      self.stdio_capture('')
+      sr.secrepo_cmd(['wipe'])
+      self.stdio_capdone()
+      self.stdout_results.index("unset 'SRN_2';")
+      self.check_leaks()
+ 
+   def test_srsmudge1(self):
+      self.pre_leaks()
+      # Test smudge filter handling of unencrypted data.
+      self.stdio_capture('This is test_srsmudge1\nThe end.')
+
+      # In order for this to work, we need to be in git repo.
+      self.assertEquals(sr.srsmudge_cmd([]),0)
+
+      self.stdio_capdone()
+      self.stdout_results.index('test_srsmudge1')
+      self.check_leaks()
+
+      # smudge with encrypted data is done in test_srclean1 below
+
+   def test_srclean1(self):
+      self.pre_leaks()
+
+      # start with no keys
+      allkeys=sr.git().get_keys()
+      sr.git().delete_keys(allkeys)
+
+      grab_stderr()
+      # With no default key:
+      self.assertEquals(sr.srclean_cmd([]),2)
+      check_stderr()
+
+      # Test clean filter handling of unencrypted data.
+      self.stdio_capture('This is test_srclean1\nThe end.')
+
+      # In order for this to work, there needs to be a
+      # 'default' key in the git repo.
+      if not sr.git().get_encryption_key():
+         grab_stderr()
+         sr.sr_new('default',False)	# add default key if it does not already exist
+         # sr.git().set_default_key('default')
+
+      dkeys=sr.git().get_keys_named('default')
+      self.assertEquals(1,len(dkeys))
+      finger = sr.create_keyfinger(dkeys[0])
+
+      grab_stderr()
+      self.assertEquals(sr.srclean_cmd([]),0)
+      check_stderr()
+
+      self.stdio_capdone()
+      header = sr.Header(buffer=self.stdout_results)
+      self.assertEquals(header.version,self.sr_version)
+      self.assertEquals(header.keyname,'default')
+      self.assertEquals(header.keyfinger,finger)
+
+      self.stdio_capture(self.stdout_results)
+      self.assertEquals(sr.srsmudge_cmd([]),0)
+      self.stdio_capdone()
+
+      self.stdout_results.index("test_srclean1")
+      self.check_leaks()
+
+   def test_keys1(self):
+      self.pre_leaks()
+      gr=sr.git()
+      for x in xrange(1,10):
+        key='testkey'+str(x)
+        name='testname'+str(x)
+        gr.set_key(key,name)
+
+      for x in xrange(1,10):
+        key='testkey'+str(x)
+        finger=sr.create_keyfinger(key)
+        self.assertEquals(key,gr.find_decryption_key(finger,'testname'))
+
+      gr.delete_key("testkey5")
+      finger=sr.create_keyfinger("testkey5")
+      self.assertRaises(sr.NoKeyAvailable,gr.find_decryption_key,finger,'testname')
+
+      gr.set_key("testkey7","newname7")
+      self.assertEquals(gr.get_keyname("testkey7"),"newname7")
+      self.check_leaks()
+
+   def test_import_export1(self):
+      self.pre_leaks()
+
+      gr=sr.git()
+      allkeys=gr.get_keys()
+      gr.delete_keys(allkeys)
+      set_stdin('''
+# comment
+key: 'importkey1' name: 'ikeyname1'
+key: 'importkey2' name: 'ikeyname2'
+key: 'importkey3' name: 'ikeyname3'
+key: 'importkey4' name: 'ikeyname4'
+# comment
+''')
+      grab_stderr()
+      sr.secrepo_cmd(['import'])
+      check_stderr()
+      self.assertEquals(done_stdin(),'')
+      lkeys = gr.get_keys()
+      self.assertEquals(len(lkeys), 4)
+      self.assertEquals("ikeyname1",lkeys["importkey1"])
+      self.assertEquals("ikeyname4",lkeys["importkey4"])
+ 
+      self.stdio_capture("")
+      sr.secrepo_cmd(['export'])
+      self.stdio_capdone()
+      self.stdout_results.index("'ikeyname2'")
+      self.stdout_results.index("'importkey3'")
+
+      allkeys=gr.get_keys()
+      gr.delete_keys(allkeys)
+
+      # Import what we just exported, but change one key to ensure it
+      # is overwritten.
+      gr.set_key("importkey3","newname3")
+      set_stdin(self.stdout_results)
+      grab_stderr()
+      sr.secrepo_cmd(['import'])
+      check_stderr()
+      self.assertEquals(done_stdin(),'')
+      lkeys = gr.get_keys()
+      self.assertEquals(len(lkeys), 4)
+      self.assertEquals("ikeyname3",lkeys["importkey3"])
+      self.assertEquals("ikeyname4",lkeys["importkey4"])
+
+      self.check_leaks()
+
+   def test_configfiles1(self):
+      self.pre_leaks()
+      configs=dict()
+      keys=dict()
+      k='MRLQ3JUUIHFG4WBZFBI='
+      keys['keypass1']='name1'
+      keys['keypass2']='name2'
+      keys['keypass3']='name3'
+      keys[k]='name4'
+      keys['keypass5']='name5'
+
+      configs['default_key']='keypass3'
+
+      cf = self.make_tempfile()
+      self.record_junk(cf+'.bak')
+      self.record_junk(cf+'.write')
+
+      sr.write_config(cf,configs,keys)
+
+      fd = open(cf,'rb')
+      contents=fd.read()
+      contents.index("key_1='")
+      contents.index("key_2='")
+      contents.index("='%s,name4'" % k)
+      contents.index("default_key='keypass3'")
+      fd.close()
+
+      (nc,nk) = sr.read_config(cf)
+
+      self.assertEquals(nc['default_key'],'keypass3')
+      self.assertEquals(nk['keypass2'],'name2')
+      self.assertEquals(len(nk),5)
+
+      keys['keypass6']='newkey6'
+      keys['keypass5']='newkey5'
+
+      sr.write_config(cf,configs,keys)
+      (nc,nk) = sr.read_config(cf)
+      self.assertEquals(len(nk),6)
+      self.assertEquals(nk['keypass5'],'newkey5')
+      self.assertEquals(nk['keypass6'],'newkey6')
+
+      # Check that the .bak file was created.
+      (nc,nk) = sr.read_config(cf+'.bak')
+      self.assertEquals(len(nk),5)
+      # look for previous value
+      self.assertEquals(nk['keypass5'],'name5')
+
+      # test handling of empty config
+      grab_stderr()
+      sr.write_config(cf,dict(),dict())
+      self.assertFalse(os.path.isfile(cf))
+      check_stderr().index('Removed config')
+
+      self.check_leaks()
+
+   # TODO: add testcases for srdiff_cmd
+
+def count_open_files():
+   '''Count currently open files on process. Useful to test that
+   code did not leak fd. Probably not portable (linux only)'''
+   if is_windoz: return 0
+
+   return len(os.listdir("/proc/%d/fd" % os.getpid()))
+
+def list_open_files():
+   if is_windoz: return
+
+   fddir= "/proc/%d/fd" % os.getpid()
+   t = os.listdir(fddir)
+   for f in t:
+      fdfile=fddir + '/'+f
+      try:
+        fdres = os.readlink(fdfile)
+      except OSError:
+        fdres = '------------'
+      print("open file: %-20s %-20s" % (fdfile,fdres))
+
+if sys.platform[:5] == 'linux':
+   is_linux=True
+   is_cygwin=False
+   is_windoz=False
+else:
+   is_linux=False
+   if sys.platform == 'cygwin':
+      is_cygwin=True
+      is_windoz=False
+   else:
+      is_cygwin=False
+      if sys.platform[:3] == 'win':
+         is_windoz=True
+         import nt
+      else:
+         is_windoz=False
+         # todo add bsd
+
+def wipe_testconfig():
+   'Delete test config files to start with a fresh configuration.'
+   for cf in [local_config,global_config]:
+      if os.path.isfile(cf):
+         os.unlink(cf)
+ 
+if __name__ == '__main__':
+
+   print("Flags: Linux=",is_linux,"Cygwin=",is_cygwin,"Windows=",is_windoz)
+
+   # Unit tests should be run from a git working tree.
+   gd = sr.gitdir()
+
+   # Override the config file name so we don't cause damage
+   # to a real repo or global configuration.
+   sr.srconfig_file='srtesting'
+
+   local_config = os.path.join(gd,'srtesting')
+   home = os.environ["HOME"]
+   if not home:
+      raise UserWarning("no home directory?")
+   global_config = os.path.join(home,'.srtesting')
+
+   # Start unit testing with no config files
+   # Should we do this also in .tearDown  ?
+   #
+   wipe_testconfig()
+
+   unittest.main()
