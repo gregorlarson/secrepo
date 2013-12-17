@@ -20,7 +20,12 @@ To add a first key to your repo, do:
    * `git secrepo --new default`
 
 ## Configuring Filters
-Secrepo works by configuring filters in your git configuration. You also need to activate these filters in you git working tree in `.gitattributes`.
+Secrepo works by configuring filters in your git configuration. You also need to activate these filters in you git working tree in `.gitattributes`. A sub-command `git secrepo config` handles git configurations.
+   * `git secrepo config` enables all the filters
+   * `git secrepo config -n` enables only the textconv filters. Use this when working with encrypted repos.
+   * `git secrepo config -u` disables the secrepo filters.
+
+To check your current configuration use: `git secrepo`
 
 ## Setting up .gitattibutes
 http://git-scm.com/docs/gitattributes

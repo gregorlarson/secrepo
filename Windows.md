@@ -50,9 +50,8 @@ To use your own editor, `EDITOR` can refer to a windows .EXE, either directly or
 
 ### Install SecRepo
 ```sh
-git clone http...sr
-cd sr/bin
-? chmod 755 *
+git clone https://github.com/gregorlarson/secrepo.git
+cd secrepo/src
 mv * ~/bin/
 cd ../test
 secrepo_tests
