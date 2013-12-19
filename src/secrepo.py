@@ -573,9 +573,13 @@ def sr_add(name,glob):
       warning("There are already %d key(s) in this repo named %s" % (len(xkeys),name))
       warning("It is recommended that you choose a different name.")
 
-   warning("Enter new key. Do not use your login password or other\n" +
-           "secure key because secrepo keys are stored in srconfig files.")
-            
+   warning("Enter new key. Do not use your login password or other")
+   warning("secure key because secrepo keys are stored in srconfig files.")
+
+   warning("Note that secrepo does not salt your pass-phrase when encrypting")
+   warning("so if your key is something you can memorize, it probably does NOT")
+   warning("have sufficient entropy to be secure.")
+
    newkey=user_stdin.readline().strip()
    if not newkey:
       warning("No input")
