@@ -488,7 +488,7 @@ class TestSecrepo1(UtilityTest):
 
       self.assertEquals(header.version, 1)
       self.assertEquals(header.keyname,'testname1')
-      self.assertEquals(header.keyfinger,'EkUL2086jSr')
+      self.assertEquals(header.keyfinger,'XSvQUytFz5y')
 
    def test_header2(self):
       'Test reading a header with bad version.'
@@ -593,14 +593,14 @@ class TestSecrepo1(UtilityTest):
      h = sr.Header(ename)
      self.assertEquals(h.version,self.sr_version)
      self.assertEquals(h.keyname,'bob')
-     self.assertEquals(h.keyfinger,'4UCnSGAJGfI')
+     self.assertEquals(h.keyfinger,'DEy9nAL4p5O')
 
      # Try reading again using raw
      efd = open(ename,'rb')
      h = sr.Header(efd)
      self.assertEquals(h.version,self.sr_version)
      self.assertEquals(h.keyname,'bob')
-     self.assertEquals(h.keyfinger,'4UCnSGAJGfI')
+     self.assertEquals(h.keyfinger,'DEy9nAL4p5O')
 
      self.assertEquals(efd.tell(),sr.header_size)
 
@@ -621,7 +621,7 @@ class TestSecrepo1(UtilityTest):
      h = sr.Header(efd)
      self.assertEquals(h.version,self.sr_version)
      self.assertEquals(h.keyname,'bob')
-     self.assertEquals(h.keyfinger,'4UCnSGAJGfI')
+     self.assertEquals(h.keyfinger,'DEy9nAL4p5O')
 
      self.assertEquals(os.lseek(efd,0,1),sr.header_size)
 
@@ -691,7 +691,7 @@ class TestSecrepo1(UtilityTest):
       header=sr.Header(enc_fileno)
       self.assertEquals(header.version,self.sr_version)
       self.assertEquals(header.keyname,'testname1')
-      self.assertEquals(header.keyfinger,'EkUL2086jSr')
+      self.assertEquals(header.keyfinger,'XSvQUytFz5y')		# testingkey1
 
       clear_name=self.make_tempfile()
       self.assertRaises(sr.DecryptFail,
@@ -802,7 +802,7 @@ class TestSecrepo1(UtilityTest):
       # Delete one of the keys
       set_stdin('YES\n')
       grab_stderr()
-      sr.secrepo_cmd(['del','Sm+WDK3hrC3'])	# del whatever
+      sr.secrepo_cmd(['del','j4xR8bFgjeV'])	# del whatever
       self.assertEquals(done_stdin(),'')
       check_stderr().index('Removing')
       lkeys = sr.git().get_keys()
@@ -817,7 +817,7 @@ class TestSecrepo1(UtilityTest):
       # delete the local encryption key
       set_stdin('YES\n')
       grab_stderr()
-      sr.secrepo_cmd(['del','y3ZgVvZSl0D'])		# del newkeyvalue
+      sr.secrepo_cmd(['del','YaUG2PnvfiB'])		# del newkeyvalue
       self.assertEquals(done_stdin(),'')
       # user is notified that default is being removed.
       check_stderr().index('default key')
@@ -866,10 +866,10 @@ class TestSecrepo1(UtilityTest):
       #sr.secrepo_cmd(['-l'])
 
       # test lookup by finger-print (local keys)
-      self.assertEquals(len(gr.get_keys_matching('oPF11G2LzaH')),1)	# ltesta3key
+      self.assertEquals(len(gr.get_keys_matching('Ix9s87O5dME')),1)	# ltesta3key
       self.assertEquals(len(gr.get_keys_matching('ltesx')),0)
       # test lookup by finger-print (env keys)
-      self.assertEquals(len(sr.env_keys_matching('DZfiQq8ic3k')),1)	# ltestb3key
+      self.assertEquals(len(sr.env_keys_matching('QhAkMfGjgQ7')),1)	# ltestb3key
       self.assertEquals(len(sr.env_keys_matching('ltesx')),0)
 
       # test lookup by name (local keys)
@@ -883,8 +883,8 @@ class TestSecrepo1(UtilityTest):
 
       # Try some key finding based on finger-print.
       dk=gr.find_decryption_key
-      self.assertEquals(dk('FwWOFulik4J','tbd'),'ltestb2key')
-      self.assertEquals(dk('qadmlwWro5f','tbd'),'anotherkey4')
+      self.assertEquals(dk('pSAz7q3N2g1','tbd'),'ltestb2key')
+      self.assertEquals(dk('srJ0Oo6HhbA','tbd'),'anotherkey4')
 
       dk=None
       gr.flush_config()
@@ -899,7 +899,7 @@ class TestSecrepo1(UtilityTest):
       # Check that default key can be set to a local key, but not other keys.
       ek=gr.get_encryption_key()
       gr.set_default_key('ltesta3key')		# by whole key
-      self.assertEquals(sr.secrepo_cmd(['default','DZfiQq8ic3k']),0)	# by fp ltestb3key
+      self.assertEquals(sr.secrepo_cmd(['default','QhAkMfGjgQ7']),0)	# by fp ltestb3key
       self.assertEquals(gr.get_encryption_key(),'ltestb3key')
       self.assertEquals(sr.secrepo_cmd(['default','repo2name']),0)	# uniq key name
       self.assertEquals(gr.get_encryption_key(),'ltestb2key')

@@ -5,6 +5,7 @@ from os.path import expanduser,isdir,isfile
 from subprocess import PIPE,CalledProcessError,Popen
 from base64 import b32encode,b64encode,b64decode
 from Crypto.Cipher import AES
+from Crypto.Hash import SHA256
 
 #
 # Global values and Utility Flags
@@ -1908,7 +1909,18 @@ def _readerthread(fh, buffer):
 # in order to make a 16 byte (128 bit) AES block.
 key_check_val=str.decode('34486745608c9cd13864','hex')
 
-def create_keyfinger(password, key_length=32):
+def create_keyfinger(password):
+    '''Create a 128 bit block (16 byte) key fingerprint that can be
+    used to check a given key is correct. This value can be included
+    in the Header to allow checking of keys before payload decryption
+    is attempted.
+    Returned value is b64 encoded and trimmed to 66 bits (11 chars)
+    for inclusion in header. I don't want to put the entire 128 bits
+    into the header, in part to save space but also to reduce the
+    exposure on the key.'''
+    return SHA256.new(password+'This is SecRepo transparent Git encryption.').digest().encode('base64')[:11]
+
+def slow_keyfinger(password, key_length=32):
     '''Create a 128 bit block (16 byte) key fingerprint that can be
     used to check a given key is correct. This value can be included
     in the Header to allow checking of keys before payload decryption
