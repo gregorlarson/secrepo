@@ -1,4 +1,6 @@
-# SecRepo
+# SecRepo (Prototype)
+## Prototype Warning
+I am still working out a few things with this script so you are free to play with it but be aware that you should be careful with it and also be prepared to re-write some history in your repo in the event I need to change the key-hashing or finger-printing.
 
 ## Transparent Git Repo Encryption
 Encrypted files in the Git repo are transparently decrypted in your workspace using Git smudge/clean and text filters.
