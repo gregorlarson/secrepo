@@ -580,12 +580,13 @@ def sr_add(name,glob):
       warning("There are already %d key(s) in this repo named %s" % (len(xkeys),name))
       warning("It is recommended that you choose a different name.")
 
-   warning("Enter new key. Do not use your login password or other")
-   warning("secure key because secrepo keys are stored in srconfig files.")
-
+   warning("Enter new key.")
    warning("Note that secrepo does not salt your pass-phrase when encrypting")
    warning("so if your key is something you can memorize, it may not have")
-   warning("sufficient entropy to be secure.")
+   warning("sufficient entropy to be secure. A 256 bit base64 password will")
+   warning("be stored as-is, other passwords will be normalized using a key")
+   warning("derivation function so your plain-text password will not visible")
+   warning("in the config files.")
 
    user_key=user_stdin.readline().strip()
    if not user_key:
@@ -598,7 +599,6 @@ def sr_add(name,glob):
    if newkey != user_key:
       warning("Note that the key you enterred was normalized to a 256 bit")
       warning("base64 key using a key derivation function.")
-      warning("stored key: "+newkey)
 
    cname = gr.get_keyname(newkey)
    if cname:
@@ -610,7 +610,7 @@ def sr_add(name,glob):
 
    ec = gr.get_encryption_key()		# encryption key prior to this.
    gr.set_key(newkey,name)
-   warning("New key (%s) stored: '%s'" % (name,newkey))
+   warning("New key (%s) stored:\n    '%s'" % (name,newkey))
    new_default_note(ec,gr,glob)		# tell user if encryption key changed.
 
    warning("You must store this key separately to avoid data loss.")
