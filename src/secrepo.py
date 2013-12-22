@@ -1,11 +1,13 @@
 from __future__ import print_function
 import sys,os,subprocess,shlex,hashlib,threading,tempfile,zlib,gzip,shutil
+import binascii
 from getpass import getpass
 from os.path import expanduser,isdir,isfile
 from subprocess import PIPE,CalledProcessError,Popen
 from base64 import b32encode,b64encode,b64decode
 from Crypto.Cipher import AES
 from Crypto.Hash import SHA256
+from Crypto.Protocol.KDF import PBKDF2
 
 #
 # Global values and Utility Flags
@@ -336,6 +338,10 @@ def secrepo_cmd(args):
       Please be aware that keys are stored in config files
       and can be accessed by others. Do not use your login
       password or other encryption keys for secrepo.''')
+   #add_p.add_argument('--raw','-r',action='store_true',
+   #   help='''Store the enterred key as-is, do not normalize with
+   #   a key derivation function. Note that this option may be removed
+   #   in the future.''')
    add_p.add_argument('key_name')
 
    config_p = sp.add_parser('config',
@@ -578,14 +584,22 @@ def sr_add(name,glob):
    warning("secure key because secrepo keys are stored in srconfig files.")
 
    warning("Note that secrepo does not salt your pass-phrase when encrypting")
-   warning("so if your key is something you can memorize, it probably does NOT")
-   warning("have sufficient entropy to be secure.")
+   warning("so if your key is something you can memorize, it may not have")
+   warning("sufficient entropy to be secure.")
 
-   newkey=user_stdin.readline().strip()
-   if not newkey:
+   user_key=user_stdin.readline().strip()
+   if not user_key:
       warning("No input")
       return False
     
+   # If the user has entered a short key, I can use a key derivation
+   # function to get a 256 bit key.
+   newkey = normalize_key(user_key)
+   if newkey != user_key:
+      warning("Note that the key you enterred was normalized to a 256 bit")
+      warning("base64 key using a key derivation function.")
+      warning("stored key: "+newkey)
+
    cname = gr.get_keyname(newkey)
    if cname:
       if cname == name:
@@ -601,6 +615,18 @@ def sr_add(name,glob):
 
    warning("You must store this key separately to avoid data loss.")
    gr.flush_config()
+
+def normalize_key(ukey):
+   '''Convert a user password to our standard 256 bit base64 key.'''
+   try:
+      if len(ukey) == 44:
+         if len(ukey.decode('base64')) == 32:
+            return ukey		# provided key is normal
+   except binascii.Error:
+      pass
+
+   # Convert the user enterred password to a 256 bit key.
+   return PBKDF2(password=ukey,salt='NoSalt',dkLen=32,count=1000).encode('base64').strip()
 
 def sr_setname(kpat,newname,glob):
    'Set the name of a key, indicated by name or finger-print'
@@ -1941,7 +1967,10 @@ def try_keys(kdict,finger):
    for key in kdict:
       if finger == create_keyfinger(key):
          return key
-      
+      # temporary
+      if finger == slow_keyfinger(key):
+         return key
+
    return None
 
 # Encrypt aes-256-cbc -nosalt
@@ -1950,7 +1979,8 @@ def try_keys(kdict,finger):
 def derive_key_and_iv(password, key_length, iv_length):
     '''Create key and iv from password without salt. Note that this does
     not appear as strong as some newer mechanisms, however, it is compatible
-    with openssl. TODO: migrate to a more secure HMAC mechanism?'''
+    with openssl. TODO: migrate to a more secure mechanism, perhaps,
+    Crypto.Protocol.KDF.PBKDF2'''
     d = d_i = ''
     while len(d) < key_length + iv_length:
         d_i = hashlib.md5(d_i + password).digest()

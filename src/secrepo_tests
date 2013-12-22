@@ -757,7 +757,7 @@ class TestSecrepo1(UtilityTest):
       set_stdin('newkeyvalue\n')
       sr.secrepo_cmd(['add','newname1'])
       self.assertEquals(done_stdin(),'')
-      check_stderr()
+      # check_stderr()
       lkeys = sr.git().get_keys()
       self.assertEquals(1,len(lkeys))
       self.check_clean()
@@ -802,7 +802,7 @@ class TestSecrepo1(UtilityTest):
       # Delete one of the keys
       set_stdin('YES\n')
       grab_stderr()
-      sr.secrepo_cmd(['del','j4xR8bFgjeV'])	# del whatever
+      sr.secrepo_cmd(['del','9tfvqdtK/kX'])	# del whatever (normalized)
       self.assertEquals(done_stdin(),'')
       check_stderr().index('Removing')
       lkeys = sr.git().get_keys()
@@ -817,7 +817,7 @@ class TestSecrepo1(UtilityTest):
       # delete the local encryption key
       set_stdin('YES\n')
       grab_stderr()
-      sr.secrepo_cmd(['del','YaUG2PnvfiB'])		# del newkeyvalue
+      sr.secrepo_cmd(['del','onb+Wsj6HtV'])		# del newkeyvalue (normalized)
       self.assertEquals(done_stdin(),'')
       # user is notified that default is being removed.
       check_stderr().index('default key')
