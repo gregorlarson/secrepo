@@ -1,4 +1,4 @@
-## Notes SecRepo Cryptography
+## SecRepo Cryptography Notes
 The underlying encryption used in SecRepo is AES with 256 bit key-size and Cypher Block Chaining  (CBC) mode.
 ## Deterministic Encryption (no salt)
 In order to take advantage of git object optimizations, it is important that the same unencrypted input always results in the same cypher-text. To this end, I am not adding any *salt* to the pass-phrase or AES key. This makes it more important that that strong pass-phrase is selected. See notes on password strength and choosing passwords, below.
@@ -39,7 +39,8 @@ References:
    * http://pythonhosted.org/pycrypto/
 
 #### OpenSSL Password Hash (Key Derivation)
-The OpenSSL approach  derives the key and initialization vector from the ASCII password using an md5 hash repeatedly until sufficient bytes are available.
+The OpenSSL approach derives the key and initialization vector from the ASCII password using an md5 hash repeatedly until sufficient bytes are available. I am still using this mechanism because it seems to work *ok* for short passwords and does not appear to *loose* any entropy for longer passwords, however, if I eventually force all passwords to be 256 bit, base64, then this code may not be the best approach. Even if I have a 256 bit base64 password that I could use as the AES key, I will still need to generate the initialization vector. This would probably be done using the same AES key material (because I need deterministic encryption). 
+
 Refs:
    * Original openssl code:
       * EVP_BytesToKey in evp_key.c
@@ -65,3 +66,11 @@ def derive_key_and_iv(password, salt, key_length, iv_length):
     return d[:key_length], d[key_length:key_length+iv_length]
 ```
 
+Using the same key and iv derivation as openssl has the advantage of compatibilty.
+For example, you can decrypt a SecRepo encrypted file with openssl by stripping the
+64 byte header and using the openssl program and gzip:
+```sh
+dd bs=16 skip=4 if=encrypted_file | openssl aes-256-cbc -nosalt -d | gunzip > clear_file
+```
+The password you would provide to openssl in the above example is the password you see in
+`{gitdir}/secrepo` or `~/secrepo` or `git-secrepo [-g] export` (without quotations).

@@ -338,10 +338,10 @@ def secrepo_cmd(args):
       Please be aware that keys are stored in config files
       and can be accessed by others. Do not use your login
       password or other encryption keys for secrepo.''')
-   #add_p.add_argument('--raw','-r',action='store_true',
-   #   help='''Store the enterred key as-is, do not normalize with
-   #   a key derivation function. Note that this option may be removed
-   #   in the future.''')
+   add_p.add_argument('--raw','-r',action='store_true',
+      help='''Store the enterred key as-is, do not normalize with
+      a key derivation function. Note that this option may be removed
+      in the future.''')
    add_p.add_argument('key_name')
 
    config_p = sp.add_parser('config',
@@ -465,7 +465,7 @@ def secrepo_cmd(args):
       srcmd=cmdargs.srcmd
 
       debug_log(2,cmdargs)
-      if	srcmd=='add':		sr_add(cmdargs.key_name,glob)
+      if	srcmd=='add':		sr_add(cmdargs.key_name,glob,cmdargs.raw)
       elif      srcmd=='decrypt':	sr_decrypt(cmdargs.filename)
       elif      srcmd=='default':	sr_default(cmdargs.key_selector,glob)
       elif	srcmd=='del':		sr_del(cmdargs.key_selector,glob)
@@ -561,7 +561,7 @@ def newkey_note():
    warning("To enable encryption on this repo, import keys or generate a new")
    warning("key using: git secrepo --new default")
 
-def sr_add(name,glob):
+def sr_add(name,glob,raw):
    '''Allow input of a new key.
 
    Note that sr_new and sr_add are very similar except that
@@ -583,22 +583,27 @@ def sr_add(name,glob):
    warning("Enter new key.")
    warning("Note that secrepo does not salt your pass-phrase when encrypting")
    warning("so if your key is something you can memorize, it may not have")
-   warning("sufficient entropy to be secure. A 256 bit base64 password will")
-   warning("be stored as-is, other passwords will be normalized using a key")
-   warning("derivation function so your plain-text password will not visible")
-   warning("in the config files.")
+   warning("sufficient entropy to be secure.")
+   if not raw:
+      warning("A 256 bit base64 password will be stored as-is, other passwords will")
+      warning("be normalized using a determanistic key derivation function so your")
+      warning("plain-text password will not visible in the config files.")
 
    user_key=user_stdin.readline().strip()
    if not user_key:
       warning("No input")
       return False
     
-   # If the user has entered a short key, I can use a key derivation
-   # function to get a 256 bit key.
-   newkey = normalize_key(user_key)
-   if newkey != user_key:
-      warning("Note that the key you enterred was normalized to a 256 bit")
-      warning("base64 key using a key derivation function.")
+   if raw:
+      newkey = user_key
+   else:
+      # If the user has entered a short key, I can use a key derivation
+      # function to get a 256 bit key.
+      newkey = normalize_key(user_key)
+      if newkey != user_key:
+         warning("Note that the password you enterred was normalized. You can")
+         warning("use the same password in the future to re-generatate this same")
+         warning("key.")
 
    cname = gr.get_keyname(newkey)
    if cname:
@@ -610,10 +615,10 @@ def sr_add(name,glob):
 
    ec = gr.get_encryption_key()		# encryption key prior to this.
    gr.set_key(newkey,name)
-   warning("New key (%s) stored:\n    '%s'" % (name,newkey))
+   warning("New key (%s) value:\n    '%s'" % (name,newkey))
    new_default_note(ec,gr,glob)		# tell user if encryption key changed.
 
-   warning("You must store this key separately to avoid data loss.")
+   warning("You should backup this key/password to avoid data loss.")
    gr.flush_config()
 
 def normalize_key(ukey):
@@ -1074,9 +1079,9 @@ def new_default_note(ec,cfscope,glob):
    for encryption.'''
 
    if glob:
-      warning("in global config.")
+      warning("was stored in global config.")
    else:
-      warning("in local config.")
+      warning("was stored in local config.")
 
    if not ec and cfscope.get_encryption_key():
       warning("This is now the default key for encryption")
