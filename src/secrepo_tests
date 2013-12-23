@@ -337,6 +337,9 @@ class TestSecrepo1(UtilityTest):
       UtilityTest.setUp(self)		#super
       self.sr_version=1
 
+   def cipher(self):
+      return sr.cipher(self.sr_version)
+
    def sr_cleanup(self):
       '''Cleanup sr module in preparation for next command or TC.
       The current state is not checked. To check if previous test
@@ -426,7 +429,7 @@ class TestSecrepo1(UtilityTest):
     self.write_tmpfile(tmpfn,'''test_encrypt1
     	This file will be encrypted to a temp file.''')
 
-    sr.encrypt_file_to_stream(tmpfn,self.sr_version,"test_encrypt1_key",efd)
+    self.cipher().encrypt_file_to_stream(tmpfn,"test_encrypt1_key",efd)
     # efd is closed need tp re=open it
     efd = open(ename,'rb')
 
@@ -445,7 +448,7 @@ class TestSecrepo1(UtilityTest):
 
     (enc_file,encfn) = self.mkstemp()
 
-    sr.encrypt_file_to_stream(clearfn,self.sr_version,key,enc_file)
+    self.cipher().encrypt_file_to_stream(clearfn,key,enc_file)
     enc_file.close()
 
     return (clearfn,encfn)
@@ -457,7 +460,7 @@ class TestSecrepo1(UtilityTest):
     estream=open(efile,'rb')
     clear_fn = self.make_tempfile()
 
-    sr.decrypt_stream_to_file(estream,self.sr_version,'test_decrypt1_key',clear_fn)
+    self.cipher().decrypt_stream_to_file(estream,'test_decrypt1_key',clear_fn)
     estream.close()
 
     self.assertEquals(sr.file_md5sum(clrfile),
@@ -472,8 +475,7 @@ class TestSecrepo1(UtilityTest):
 
     # Decrypt will fail because key is wrong
     self.assertRaises(sr.DecryptFail,
-	sr.decrypt_stream_to_file,
-		estream,self.sr_version,'test_decrypt1_key',clear_fn)
+    self.cipher().decrypt_stream_to_file,estream,'test_decrypt1_key',clear_fn)
 
     estream.close()
 
@@ -585,7 +587,7 @@ class TestSecrepo1(UtilityTest):
      h.write(efd)
      clearname = self.new_tmpfile('''This is some text to encrypt
      	test_write_encrypted1\n''')
-     sr.encrypt_file_to_stream(clearname,self.sr_version,'testkey',efd)
+     self.cipher().encrypt_file_to_stream(clearname,'testkey',efd)
      efd.close()
 
      #shutil.copyfile(ename,'encrypted1')	#debug
@@ -607,7 +609,7 @@ class TestSecrepo1(UtilityTest):
      os.unlink(clearname)
      self.assertFalse(os.path.isfile(clearname))
 
-     sr.decrypt_stream_to_file(efd,h.version,'testkey',clearname)
+     sr.cipher(h.version).decrypt_stream_to_file(efd,'testkey',clearname)
      efd.close()
 
      #shutil.copyfile(clearname,'decrypted1')	#debug
@@ -628,7 +630,7 @@ class TestSecrepo1(UtilityTest):
      os.unlink(clearname)
      self.assertFalse(os.path.isfile(clearname))
 
-     sr.decrypt_stream_to_file(efd,h.version,'testkey',clearname)
+     sr.cipher(h.version).decrypt_stream_to_file(efd,'testkey',clearname)
      os.close(efd)
 
      clear_fd=open(clearname,'r')
@@ -677,7 +679,7 @@ class TestSecrepo1(UtilityTest):
       os.lseek(enc_fileno,sr.header_size,0)		# rewind to end of header
 
       clear_name=self.make_tempfile()
-      sr.decrypt_stream_to_file(enc_fileno,self.sr_version,'testingkey1',clear_name)
+      self.cipher().decrypt_stream_to_file(enc_fileno,'testingkey1',clear_name)
       os.close(enc_fileno)
 
       #shutil.copyfile(clear_name,'decrypt3')	#debug
@@ -695,7 +697,7 @@ class TestSecrepo1(UtilityTest):
 
       clear_name=self.make_tempfile()
       self.assertRaises(sr.DecryptFail,
-      	sr.decrypt_stream_to_file,enc_fileno,self.sr_version,'badkey',clear_name)
+      	self.cipher().decrypt_stream_to_file,enc_fileno,'badkey',clear_name)
 
       os.close(enc_fileno)
 

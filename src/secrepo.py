@@ -1312,7 +1312,7 @@ def srclean_cmd(args):
    header.write(out_file)
 
    # Supply the prefix bytes already read in order to avoid a pipe here.
-   encrypt_stream_to_stream(in_file,gr.default_version,key,out_file,prefix=inbuf)
+   cipher(gr.default_version).encrypt_stream_to_stream(in_file,key,out_file,prefix=inbuf)
 
    return 0	# exit 0
 
@@ -1455,7 +1455,7 @@ def smudge_filter(in_file,out_file):
    debug_log(2,"sr_smudge key='%s' hname='%s' kf: %s" %
              (key,header.keyname,header.keyfinger))
    try:
-      decrypt_stream_to_stream(in_file,header.version,key,out_file)
+      cipher(header.version).decrypt_stream_to_stream(in_file,key,out_file)
    except SrException as e:
       raise DecryptFail("version: %d name: %s finger: %s" %
          (header.version,header.keyname,header.keyfinger), e)
@@ -1474,6 +1474,10 @@ class SrConfig:
       # per repo (seems unlikely however).
       #
       self.default_version=1
+
+      # To speed the secrepo decrypt command which handles multiple files
+      # we create a faster map from key finger-print to key.
+      self.kf_cache=dict()
 
    def _read_config(self):
 
@@ -1618,6 +1622,15 @@ class SrConfig:
       if key in self._keys:
          self.mark_changed()
          del self._keys[key]
+
+      # To be consistent, I could remove key from kf_cache
+      # self.kf_cache=dict()
+      df=None
+      for f,k in self.kf_cache.items():
+         if k == key:
+            df=f
+
+      if df: del self.kf_cache[df]
 
    def set_key(self,key,name):
       '''Add or change an existing key in local repo.
@@ -1776,20 +1789,30 @@ class Gitrepo(SrConfig):
          # are now required to have a name field.
          raise SrException("find_decryption_key no name provided.")
 
+      # Have we found this already
+      if finger in self.kf_cache:
+         return self.kf_cache[finger]
+
       # For speed, try local keys first.
       key = self.get_decryption_key(finger)
       if key:
          # Found a usable key in local keystore.
+         self.kf_cache[finger]=key
          return key
 
       key = env_decryption_key(finger)
       if key:
          # Found a usable key in environment.
+         self.kf_cache[finger]=key
          return key
 
       # Try global scope
       gc = gconf()
       key = try_keys(gc.get_keys(), finger)
+      if key:
+         # Found a usable key in global store.
+         self.kf_cache[finger]=key
+         return key
 
       # TODO:	Look into other location(s) for the key.
       #		- ~/.srconfig
@@ -1899,115 +1922,180 @@ def get_tmpfile():
     os.close(fd)
     return fname
 
-def encrypt_stream_to_stream_v1(instream,key,fstream,prefix=None):
-    debug_log(2,"encryptv2:",instream,key,fstream)
+v1_cipher=None
+def cipher(version):
+   global v1_cipher
+   if version == 1:
+      if not v1_cipher:
+         v1_cipher = StreamCipher_v1()
+      return v1_cipher
+   raise DecryptFail("unsupported version %d" % version)
 
-    (ssl_read_pipe,gzip_write_pipe) = os.pipe()
+class StreamCipher:
+   '''Super-class for stream ciphers.
+   For now, stream-ciphers are stateless and may be Singletons, however
+   in the future, I might add the key to the constructor, or, add methods
+   to this class to search for decryption key based on fingerprint because
+   the version is known at that point.
+   Initially, all the implementation will go in this class. When v2 is added,
+   the differences will be migrated into subclesses.'''
+   def __init__(self):
+      '''Nothing to see here.'''
+      pass
 
-    # Create a thread that reads the clear data and sends the compressed data
-    # output to the openssl encryptor pipe.
-    # Any prefix buffer is passed to the thread to be processed first.
-    #
-    gzthread=threading.Thread(target=compress_thread,
-	args=(instream,gzip_write_pipe,prefix))
+   def encrypt_stream_to_stream(self,instream,key,fstream,prefix=None):
+      debug_log(2,"encrypt:",instream,key,fstream)
+
+      (ssl_read_pipe,gzip_write_pipe) = os.pipe()
+
+      # Create a thread that reads the clear data and sends the compressed data
+      # output to the openssl encryptor pipe.
+      # Any prefix buffer is passed to the thread to be processed first.
+      #
+      gzthread=threading.Thread(target=compress_thread,
+            args=(instream,gzip_write_pipe,prefix))
+      gzthread.setDaemon(True)
+      gzthread.start()
+
+      # Ideally we would close the input stream after we join the gzthread,
+      # but it could be stdin, so we should just leave it alone and
+      # not reference it any more.
+      instream=None	# read in thread
+      prefix=None		# processed in thread
+
+      self.aes_encrypt(ssl_read_pipe,fstream,key)
+      os.close(ssl_read_pipe)
+
+      # Ideally we would close output file here, however, it might be
+      # stdout, so just remove any references to it. It is up to caller
+      # that created stream to close/flush it.
+      fstream=None
+
+      gzthread.join()
+
+      # Doesn't seem to be any return code from the GzipFile object.
+
+   def encrypt_file_to_stream(self,fn,key,stream):
+       '''Encrypt file to a stream.
+       Note that we currently support a buffered stream or a fileno,
+       however, I should just pick one or the other :)
+       Caller must close the destination stream if needed.'''
+
+       fd=os.open(fn,os_read)
+       try:
+          rc = self.encrypt_stream_to_stream(fd,key,stream)
+          return  rc
+       finally:
+          os.close(fd)
+
+   def decrypt_stream_to_stream(self,instream,key,outstream):
+    '''Decrypt a stream into a file. Stream is then closed.
+    Note that I support buffered streams and a fileno.
+    I should pick just one  :)
+    Caller must close streams if needed.'''
+
+    (gunzip_read_pipe,ssl_write_pipe) = os.pipe()
+    dstatus=DecompStat()
+
+    # Create a thread that reads the decrypted data and decompresses it.
+    gzthread=threading.Thread(target=decompress_thread,
+	args=(gunzip_read_pipe,outstream,dstatus))
     gzthread.setDaemon(True)
     gzthread.start()
 
-    # Ideally we would close the input stream after we join the gzthread,
-    # but it could be stdin, so we should just leave it alone and
-    # not reference it any more.
-    instream=None	# read in thread
-    prefix=None		# processed in thread
+    # The caller will close/flush the outstream, we don't need
+    # to reference it any more here. The gzthread still has it.
+    outstream=None
 
-    aes_encrypt(ssl_read_pipe,fstream,key)
-    os.close(ssl_read_pipe)
+    decrypt_success=False
+    try:
+       self.aes_decrypt(instream,ssl_write_pipe,key)
+       decrypt_success=True
+    finally:
+       # Note that the decompressor will block until it gets EOF on its
+       # pipe or decompress fails.
+       os.close(ssl_write_pipe)
+       # In the exception case I need to finish gzthread.
+       # I I did not want to .join here, I guess I could simply
+       # sleep for a second, but that would be a visible delay.
+       if not decrypt_success:
+          gzthread.join()
 
-    # Ideally we would close output file here, however, it might be
-    # stdout, so just remove any references to it. It is up to caller
-    # that created stream to close/flush it.
-    fstream=None
+    # Ideally we would close the input stream, however, it might be
+    # stdin, so just drop any references to it.
+    instream=None
+
+    # If incorrect decryption key is used then gz may exit without
+    # reading all the output, in which case openssl could then be
+    # blocked on it's stdout pipe? With bourne-shell, I think openssl
+    # would get some signal about writing to a closed pipe.
+    # Hopefully that is what happens here also. The gzthread
+    # will close the read pipe on a failure.
 
     gzthread.join()
 
-    # Doesn't seem to be any return code from the GzipFile object.
+    if not dstatus.success:
+       debug_log(1,"gunzip did not complete (%d output)" % dstatus.outbytes)
+       # It is possible that gunzip failed because the decryption
+       # failed. In any case, we are not going to get any useful output.
+       raise DecryptFail('_v1 gunzip outbytes=%d' %
+		dstatus.outbytes,dstatus.exception)
 
-# from subprocess
-def _readerthread(fh, buffer):
-    buffer.append(fh.read())
+    if dstatus.outbytes == 0:
+       debug_log(1,"no output. Input: %d" % dstatus.inbytes)
 
-# 80 bits (10 bytes) unique value to identify correct key.
-# Another 48 bits (6 bytes) of key data is added to this
-# in order to make a 16 byte (128 bit) AES block.
-key_check_val=str.decode('34486745608c9cd13864','hex')
+    if decrypt_success: return
 
-def create_keyfinger(password):
-    '''Create a 128 bit block (16 byte) key fingerprint that can be
-    used to check a given key is correct. This value can be included
-    in the Header to allow checking of keys before payload decryption
-    is attempted.
-    Returned value is b64 encoded and trimmed to 66 bits (11 chars)
-    for inclusion in header. I don't want to put the entire 128 bits
-    into the header, in part to save space but also to reduce the
-    exposure on the key.'''
-    return SHA256.new(password+'This is SecRepo transparent Git encryption.').digest().encode('base64')[:11]
+    raise DecryptFail('_v1 decrypt_fail')
 
-def slow_keyfinger(password, key_length=32):
-    '''Create a 128 bit block (16 byte) key fingerprint that can be
-    used to check a given key is correct. This value can be included
-    in the Header to allow checking of keys before payload decryption
-    is attempted.
-    Returned value is b64 encoded and trimmed to 66 bits (11 chars)
-    for inclusion in header. I don't want to put the entire 128 bits
-    into the header, in part to save space but also to reduce the
-    exposure on the key.'''
-    if len(password) < 6:
-       raise SrException("Password is less than 6 chars")
-    key, iv = derive_key_and_iv(password, key_length, AES.block_size)
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    return b64encode(cipher.encrypt(key_check_val+password[:6]))[:11]
+   def decrypt_stream_to_file(self,stream,key,fn):
+      # if destination exists, remove it
+      if os.path.isfile(fn): os.unlink(fn)
+      fd=os.open(fn,os_create)
+      success=False
+      try:
+         rc = self.decrypt_stream_to_stream(stream,key,fd)
+         protect_file(fn)
+         success=True
+         return rc
+      finally:
+         os.close(fd)
+         # If the operation was not successfull, then discard
+         # any file created.
+         if not success:
+            if os.path.isfile(fn):
+               debug_log(1,"removing %s due to failure." % fn)
+               os.unlink(fn)
 
-def try_keys(kdict,finger):
-   '''Try each key in dict against some check_data.
-   Valid key or None is returned.'''
-   for key in kdict:
-      if finger == create_keyfinger(key):
-         return key
-      # temporary
-      if finger == slow_keyfinger(key):
-         return key
-
-   return None
-
-# Encrypt aes-256-cbc -nosalt
-# ref: http://stackoverflow.com/questions/16761458/how-to-aes-encrypt-decrypt-files-using-python-pycrypto-in-an-openssl-compatible
-#
-def derive_key_and_iv(password, key_length, iv_length):
-    '''Create key and iv from password without salt. Note that this does
-    not appear as strong as some newer mechanisms, however, it is compatible
-    with openssl. TODO: migrate to a more secure mechanism, perhaps,
-    Crypto.Protocol.KDF.PBKDF2'''
-    d = d_i = ''
-    while len(d) < key_length + iv_length:
+   # Encrypt aes-256-cbc -nosalt
+   # ref: http://stackoverflow.com/questions/16761458/how-to-aes-encrypt-decrypt-files-using-python-pycrypto-in-an-openssl-compatible
+   #
+   def derive_key_and_iv(self, password, key_length, iv_length):
+      '''Create key and iv from password without salt. Note that this does
+      not appear as strong as some newer mechanisms, however, it is compatible
+      with openssl.'''
+      d = d_i = ''
+      while len(d) < key_length + iv_length:
         d_i = hashlib.md5(d_i + password).digest()
         d += d_i
-    return d[:key_length], d[key_length:key_length+iv_length]
+      return d[:key_length], d[key_length:key_length+iv_length]
 
-def aes_encrypt(in_file, out_file, password, key_length=32):
-    '''Encrypt a stream, output in openssl aes-256-cbc compatible form.'''
-    bs = AES.block_size
-    key, iv = derive_key_and_iv(password, key_length, bs)
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    finished = False
-    while not finished:
-        # 1024 aes 'blocks' of 16 bytes each.
-        if isinstance(in_file,int):
-           chunk = os.read(in_file,1024 * bs)
-        else:
-           chunk = in_file.read(1024 * bs)
+   def aes_encrypt(self, in_file, out_file, password, key_length=32):
+      '''Encrypt a stream, output in openssl aes-256-cbc compatible form.'''
+      bs = AES.block_size
+      key, iv = self.derive_key_and_iv(password, key_length, bs)
+      cipher = AES.new(key, AES.MODE_CBC, iv)
+      finished = False
+      while not finished:
+         # 1024 aes 'blocks' of 16 bytes each.
+         if isinstance(in_file,int):
+            chunk = os.read(in_file,1024 * bs)
+         else:
+            chunk = in_file.read(1024 * bs)
 
-        # We got no data or less data than asked for, assume
-        # EOF.
-        if len(chunk) == 0 or len(chunk) % bs != 0:
+         # We got no data or less data than asked for, assume
+         # EOF.
+         if len(chunk) == 0 or len(chunk) % bs != 0:
             # Because the cipher only operates on fixed size
             # blocks, we add some additional padding to the
             # last chunk. This padding must be removed when
@@ -2018,32 +2106,32 @@ def aes_encrypt(in_file, out_file, password, key_length=32):
             chunk += padding_length * chr(padding_length)
             finished = True
 
-        if isinstance(out_file,int):
-           os.write(out_file,cipher.encrypt(chunk))
-        else:
-           out_file.write(cipher.encrypt(chunk))
+         if isinstance(out_file,int):
+            os.write(out_file,cipher.encrypt(chunk))
+         else:
+            out_file.write(cipher.encrypt(chunk))
 
-def aes_decrypt(in_file, out_file, password, key_length=32):
-    '''Decrypt a stream in openssl aes-256-cbc form.'''
-    bs = AES.block_size
-    key, iv = derive_key_and_iv(password, key_length, bs)
-    cipher = AES.new(key, AES.MODE_CBC, iv)
-    next_chunk = ''
-    finished = False
-    while not finished:
-        chunk = next_chunk
-        try:
-           if isinstance(in_file,int):
-              next_chunk = cipher.decrypt(os.read(in_file,1024 * bs))
-           else:
-              next_chunk = cipher.decrypt(in_file.read(1024 * bs))
+   def aes_decrypt(self, in_file, out_file, password, key_length=32):
+      '''Decrypt a stream in openssl aes-256-cbc form.'''
+      bs = AES.block_size
+      key, iv = self.derive_key_and_iv(password, key_length, bs)
+      cipher = AES.new(key, AES.MODE_CBC, iv)
+      next_chunk = ''
+      finished = False
+      while not finished:
+         chunk = next_chunk
+         try:
+            if isinstance(in_file,int):
+               next_chunk = cipher.decrypt(os.read(in_file,1024 * bs))
+            else:
+               next_chunk = cipher.decrypt(in_file.read(1024 * bs))
 
-        except ValueError as e:
-           # The .decrypt method above will raise exception if input
-           # length is not a multiple of bs
-           raise DecryptFail("aes_decrypt cipher.decrypt",e)
+         except ValueError as e:
+            # The .decrypt method above will raise exception if input
+            # length is not a multiple of bs
+            raise DecryptFail("aes_decrypt cipher.decrypt",e)
 
-        if len(next_chunk) == 0:
+         if len(next_chunk) == 0:
             # Look at the last byte of the last chunk to
             # determine the amount of padding to be removed.
             pad_len = ord(chunk[-1])
@@ -2062,11 +2150,57 @@ def aes_decrypt(in_file, out_file, password, key_length=32):
             chunk = chunk[:-pad_len]	# delete pad bytes
             finished = True
 
-        if chunk:
-           if isinstance(out_file,int):
-              os.write(out_file,chunk)
-           else:
-              out_file.write(chunk)
+         if chunk:
+            if isinstance(out_file,int):
+               os.write(out_file,chunk)
+            else:
+               out_file.write(chunk)
+
+# from subprocess
+def _readerthread(fh, buffer):
+    buffer.append(fh.read())
+
+# 80 bits (10 bytes) unique value to identify correct key.
+# Another 48 bits (6 bytes) of key data is added to this
+# in order to make a 16 byte (128 bit) AES block.
+key_check_val=str.decode('34486745608c9cd13864','hex')
+
+def create_keyfinger(password):
+    '''Create a key fingerprint that can be used to check a given key is
+    correct. This value can be included in the Header to allow checking of
+    keys before payload decryption is attempted.
+    Returned value is b64 encoded and trimmed to 66 bits (11 chars)
+    for inclusion in header. I don't want to put the entire 256 bits
+    into the header, in part to save space but also to reduce the
+    exposure on the key.'''
+    return SHA256.new(password+'This is SecRepo transparent Git encryption.').digest().encode('base64')[:11]
+
+def slow_keyfinger(password, key_length=32):
+    '''Create a 128 bit block (16 byte) key fingerprint that can be
+    used to check a given key is correct. This value can be included
+    in the Header to allow checking of keys before payload decryption
+    is attempted.
+    Returned value is b64 encoded and trimmed to 66 bits (11 chars)
+    for inclusion in header. I don't want to put the entire 128 bits
+    into the header, in part to save space but also to reduce the
+    exposure on the key.'''
+    if len(password) < 6:
+       raise SrException("Password is less than 6 chars")
+    key, iv = cipher(1).derive_key_and_iv(password, key_length, AES.block_size)
+    aes = AES.new(key, AES.MODE_CBC, iv)
+    return b64encode(aes.encrypt(key_check_val+password[:6]))[:11]
+
+def try_keys(kdict,finger):
+   '''Try each key in dict against some check_data.
+   Valid key or None is returned.'''
+   for key in kdict:
+      if finger == create_keyfinger(key):
+         return key
+      # temporary
+      if finger == slow_keyfinger(key):
+         return key
+
+   return None
 
 def compress_thread(infile,outfile,prefix):
    '''Thread that compresses a stream of data.
@@ -2192,114 +2326,10 @@ def decompress_thread(infile,outfile,stat):
 
    # outfile may be stdout, so we can't really close it here,
 
-def decrypt_stream_to_file(stream,version,key,fn):
-   if version != 1:
-      raise DecryptFail("unsupported mode %d" % version)
-   # if destination exists, remove it
-   if os.path.isfile(fn): os.unlink(fn)
-   fd=os.open(fn,os_create)
-   success=False
-   try:
-      rc = decrypt_stream_to_stream(stream,version,key,fd)
-      protect_file(fn)
-      success=True
-      return rc
-   finally:
-       os.close(fd)
-       # If the operation was not successfull, then discard
-       # any file created.
-       if not success:
-          if os.path.isfile(fn):
-             debug_log(1,"removing %s due to failure." % fn)
-             os.unlink(fn)
-
-def decrypt_stream_to_stream(instream,version,key,outstream):
-   if version == 1:
-      return decrypt_stream_to_stream_v1(instream,key,outstream)
-
-   raise DecryptFail("unsupport mode %d" % version)
-
-def decrypt_stream_to_stream_v1(instream,key,outstream):
-    '''Decrypt a stream into a file. Stream is then closed.
-    Note that I support buffered streams and a fileno.
-    I should pick just one  :)
-    Caller must close streams if needed.'''
-
-    (gunzip_read_pipe,ssl_write_pipe) = os.pipe()
-    dstatus=DecompStat()
-
-    # Create a thread that reads the decrypted data and decompresses it.
-    gzthread=threading.Thread(target=decompress_thread,
-	args=(gunzip_read_pipe,outstream,dstatus))
-    gzthread.setDaemon(True)
-    gzthread.start()
-
-    # The caller will close/flush the outstream, we don't need
-    # to reference it any more here. The gzthread still has it.
-    outstream=None
-
-    decrypt_success=False
-    try:
-       aes_decrypt(instream,ssl_write_pipe,key)
-       decrypt_success=True
-    finally:
-       # Note that the decompressor will block until it gets EOF on its
-       # pipe or decompress fails.
-       os.close(ssl_write_pipe)
-       # In the exception case I need to finish gzthread.
-       # I I did not want to .join here, I guess I could simply
-       # sleep for a second, but that would be a visible delay.
-       if not decrypt_success:
-          gzthread.join()
-
-    # Ideally we would close the input stream, however, it might be
-    # stdin, so just drop any references to it.
-    instream=None
-
-    # If incorrect decryption key is used then gz may exit without
-    # reading all the output, in which case openssl could then be
-    # blocked on it's stdout pipe? With bourne-shell, I think openssl
-    # would get some signal about writing to a closed pipe.
-    # Hopefully that is what happens here also. The gzthread
-    # will close the read pipe on a failure.
-
-    gzthread.join()
-
-    if not dstatus.success:
-       debug_log(1,"gunzip did not complete (%d output)" % dstatus.outbytes)
-       # It is possible that gunzip failed because the decryption
-       # failed. In any case, we are not going to get any useful output.
-       raise DecryptFail('_v1 gunzip outbytes=%d' %
-		dstatus.outbytes,dstatus.exception)
-
-    if dstatus.outbytes == 0:
-       debug_log(1,"no output. Input: %d" % dstatus.inbytes)
-
-    if decrypt_success: return
-
-    raise DecryptFail('_v1 decrypt_fail')
-
-def encrypt_file_to_stream(fn,version,key,stream):
-    '''Encrypt file to a stream.
-    Note that we currently support a buffered stream or a fileno,
-    however, I should just pick one or the other :)
-    Caller must close the destination stream if needed.'''
-
-    if version != 1:
-       raise EncryptFail("unsupported mode %d" % version)
-
-    fd=os.open(fn,os_read)
-    try:
-       rc = encrypt_stream_to_stream(fd,version,key,stream)
-       return  rc
-    finally:
-       os.close(fd)
-
-def encrypt_stream_to_stream(instream,version,key,stream,prefix=None):
-   if version == 1:
-      return encrypt_stream_to_stream_v1(instream,key,stream,prefix)
-
-   raise EncryptFail("unsupported mode %d" % version)
+class StreamCipher_v1(StreamCipher):
+   '''Version 1 stream cipher'''
+   def __init__(self):
+      StreamCipher.__init__(self)
 
 class Header:
   '''Class to extract and hold header data from encrypted file.'''
@@ -2500,7 +2530,7 @@ def decrypt_file(filename):
       tmpfile = os.open(tmp,os_read)
       Header(tmpfile)
 
-      decrypt_stream_to_stream(tmpfile, header.version, key, outfile)
+      cipher(header.version).decrypt_stream_to_stream(tmpfile, key, outfile)
 
       # Truncate output file to current position.
       # Python 3.3 may have a better API for this:
@@ -2530,10 +2560,11 @@ def sredit_encrypted(editfile):
     tmpfilename=get_tmpfile()
     try:
        header = Header(stream)
+       sciph=cipher(header.version)
+
        key = get_edit_key(header.keyfinger, header.keyname)
 
-       decrypt_stream_to_file(stream, header.version, key,
-       		tmpfilename)
+       sciph.decrypt_stream_to_file(stream, key, tmpfilename)
        stream.close()
        stream=None
        if edit_existing_file(tmpfilename):
@@ -2543,7 +2574,7 @@ def sredit_encrypted(editfile):
           os.rename(editfile,bk)
           stream = open(editfile,'wb')
           header.write(stream)
-          encrypt_file_to_stream(tmpfilename, header.version, key, stream)
+          sciph.encrypt_file_to_stream(tmpfilename, key, stream)
           stream.close()
           stream=None
           return True
