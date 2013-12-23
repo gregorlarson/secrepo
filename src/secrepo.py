@@ -1925,6 +1925,20 @@ def get_tmpfile():
     os.close(fd)
     return fname
 
+class DecompStat:
+  '''Status of the decompressor'''
+  def __init__(self):
+    self.success=False
+    self.inbytes=0
+    self.outbytes=0
+    self.exception=None
+  def record_in(self,dlen):
+    self.inbytes = self.inbytes+dlen
+  def record_out(self,dlen):
+    self.outbytes = self.outbytes+dlen
+  def record_success(self):
+    self.success=True
+
 v1_cipher=None
 def cipher(version):
    global v1_cipher
@@ -1941,10 +1955,120 @@ class StreamCipher:
    to this class to search for decryption key based on fingerprint because
    the version is known at that point.
    Initially, all the implementation will go in this class. When v2 is added,
-   the differences will be migrated into subclesses.'''
+   the differences will be migrated into subclasses.'''
    def __init__(self):
       '''Nothing to see here.'''
       pass
+
+   def compress_thread(self,infile,outfile,prefix):
+      '''Thread that compresses a stream of data.
+      Optional prefix buffer is processed first.'''
+
+      # GzipFile needs a python file object
+      if isinstance(outfile,int):
+         of = os.fdopen(outfile,'wb')
+      else:
+         of = outfile
+
+      outfile=None
+
+      zf = gzip.GzipFile(filename='',mode='wb',mtime=0,
+            fileobj=of,compresslevel=9)
+
+      eof = False
+      while not eof:
+         if prefix:
+            # process prefix bytes first
+            buf = prefix
+            prefix = None
+         else:
+            # Read a block of input data
+            if isinstance(infile,int):
+               # from a raw (os-level) file.
+               buf=os.read(infile,32768)
+            else:
+               # from a python buffered file.
+               buf=infile.read(32768)
+
+         if buf:
+            # If we got some data, write it to the compressor
+            # Here we hope that zlib releases the global execution lock
+            # so other python threads are not blocked while it is crunching
+            # in C.
+            zf.write(buf)
+         else:
+            # We got no data, so we are at the end of input
+            eof = True
+
+      zf.close()	# finish the compression
+
+      # In order to allow the ssl encryptor to unblock and finish, we need
+      # to close out output stream here (the ssl encryptor is reading from
+      # this). My hope is that the zf.close() above will do that automatically,
+      # however, if it does not for some reason we can do it here:
+      of.close()
+
+   def decompress_thread(self,infile,outfile,stat):
+      '''Thread that decompresses a stream of data. Note that the
+      input stream will be closed in the event of an error.'''
+
+      # GzipFile needs a real python file object, not just a stream.
+      # This is problem which is solved in python3. In python2 we
+      # could just use zlib directly, or, we could write the
+      # data to a temporary file first.
+
+      zd = zlib.decompressobj(16+zlib.MAX_WBITS)
+
+      try:
+         eof=False
+         while not eof:
+            # Read some compressed data from stream
+            if isinstance(infile,int):
+               # from raw stream
+               buf=os.read(infile,32768)
+            else:
+               # from buffered stream
+               buf=infile.read(32768)
+
+            # Note amount of input data and detect eof
+            if buf:
+               stat.record_in(len(buf))
+               # decompress the data
+               dbuf=zd.decompress(buf)
+            else:
+               eof=True
+               dbuf=zd.flush()	# get any remaining data from decompress
+
+            if dbuf:
+               stat.record_out(len(dbuf))	# note amount
+
+               # Write the block of decompressed data.
+               if isinstance(outfile,int):
+                  # to a raw (os-level) file.
+                  os.write(outfile,dbuf)
+               else:
+                  # to a python buffered file.
+                  outfile.write(dbuf)
+
+         # No more compressed data.
+         stat.record_success()
+         debug_log(1,"decompress success in: %d out: %d" %
+	      (stat.inbytes,stat.outbytes))
+
+      except zlib.error as e:
+         # Decompression failed, probably because input stream
+         # was not correct.
+         stat.exception=e
+
+      finally:
+         # If decompress fails for any reason, this should signal to
+         # the write-side of the pipe that it has failed.
+         if isinstance(infile,int):
+            os.close(infile)
+         else:
+            infile.close()
+
+      # outfile may be stdout, so we can't really close it here,
 
    def encrypt_stream_to_stream(self,instream,key,fstream,prefix=None):
       debug_log(2,"encrypt:",instream,key,fstream)
@@ -1955,7 +2079,7 @@ class StreamCipher:
       # output to the openssl encryptor pipe.
       # Any prefix buffer is passed to the thread to be processed first.
       #
-      gzthread=threading.Thread(target=compress_thread,
+      gzthread=threading.Thread(target=self.compress_thread,
             args=(instream,gzip_write_pipe,prefix))
       gzthread.setDaemon(True)
       gzthread.start()
@@ -2001,7 +2125,7 @@ class StreamCipher:
     dstatus=DecompStat()
 
     # Create a thread that reads the decrypted data and decompresses it.
-    gzthread=threading.Thread(target=decompress_thread,
+    gzthread=threading.Thread(target=self.decompress_thread,
 	args=(gunzip_read_pipe,outstream,dstatus))
     gzthread.setDaemon(True)
     gzthread.start()
@@ -2204,130 +2328,6 @@ def try_keys(kdict,finger):
          return key
 
    return None
-
-def compress_thread(infile,outfile,prefix):
-   '''Thread that compresses a stream of data.
-   Optional prefix buffer is processed first.'''
-
-   # GzipFile needs a python file object
-   if isinstance(outfile,int):
-      of = os.fdopen(outfile,'wb')
-   else:
-      of = outfile
-
-   outfile=None
-
-   zf = gzip.GzipFile(filename='',mode='wb',mtime=0,
-	fileobj=of,compresslevel=9)
-
-   eof = False
-   while not eof:
-      if prefix:
-         # process prefix bytes first
-         buf = prefix
-         prefix = None
-      else:
-         # Read a block of input data
-         if isinstance(infile,int):
-            # from a raw (os-level) file.
-            buf=os.read(infile,32768)
-         else:
-            # from a python buffered file.
-            buf=infile.read(32768)
-
-      if buf:
-         # If we got some data, write it to the compressor
-         # Here we hope that zlib releases the global execution lock
-         # so other python threads are not blocked while it is crunching
-         # in C.
-         zf.write(buf)
-      else:
-         # We got no data, so we are at the end of input
-         eof = True
-
-   zf.close()	# finish the compression
-
-   # In order to allow the ssl encryptor to unblock and finish, we need
-   # to close out output stream here (the ssl encryptor is reading from
-   # this). My hope is that the zf.close() above will do that automatically,
-   # however, if it does not for some reason we can do it here:
-   of.close()
-
-class DecompStat:
-  '''Status of the decompressor'''
-  def __init__(self):
-    self.success=False
-    self.inbytes=0
-    self.outbytes=0
-    self.exception=None
-  def record_in(self,dlen):
-    self.inbytes = self.inbytes+dlen
-  def record_out(self,dlen):
-    self.outbytes = self.outbytes+dlen
-  def record_success(self):
-    self.success=True
-
-def decompress_thread(infile,outfile,stat):
-   '''Thread that decompresses a stream of data. Note that the
-   input stream will be closed in the event of an error.'''
-
-   # GzipFile needs a real python file object, not just a stream.
-   # This is problem which is solved in python3. In python2 we
-   # could just use zlib directly, or, we could write the
-   # data to a temporary file first.
-
-   zd = zlib.decompressobj(16+zlib.MAX_WBITS)
-
-   try:
-      eof=False
-      while not eof:
-         # Read some compressed data from stream
-         if isinstance(infile,int):
-            # from raw stream
-            buf=os.read(infile,32768)
-         else:
-            # from buffered stream
-            buf=infile.read(32768)
-
-         # Note amount of input data and detect eof
-         if buf:
-            stat.record_in(len(buf))
-            # decompress the data
-            dbuf=zd.decompress(buf)
-         else:
-            eof=True
-            dbuf=zd.flush()	# get any remaining data from decompress
-
-         if dbuf:
-            stat.record_out(len(dbuf))	# note amount
-
-            # Write the block of decompressed data.
-            if isinstance(outfile,int):
-               # to a raw (os-level) file.
-               os.write(outfile,dbuf)
-            else:
-               # to a python buffered file.
-               outfile.write(dbuf)
-
-      # No more compressed data.
-      stat.record_success()
-      debug_log(1,"decompress success in: %d out: %d" %
-	(stat.inbytes,stat.outbytes))
-
-   except zlib.error as e:
-      # Decompression failed, probably because input stream
-      # was not correct.
-      stat.exception=e
-
-   finally:
-      # If decompress fails for any reason, this should signal to
-      # the write-side of the pipe that it has failed.
-      if isinstance(infile,int):
-         os.close(infile)
-      else:
-         infile.close()
-
-   # outfile may be stdout, so we can't really close it here,
 
 class StreamCipher_v1(StreamCipher):
    '''Version 1 stream cipher'''
