@@ -616,7 +616,7 @@ def sr_add(name,glob,raw):
    ec = gr.get_encryption_key()		# encryption key prior to this.
    gr.set_key(newkey,name)
    warning("New key (%s) value:\n    '%s'" % (name,newkey))
-   new_default_note(ec,gr,glob)		# tell user if encryption key changed.
+   gr.new_default_note(ec)		# tell user if encryption key changed.
 
    warning("You should backup this key/password to avoid data loss.")
    gr.flush_config()
@@ -1068,27 +1068,11 @@ def sr_new(name,glob):
    gr.set_key(newkey,name)
        
    warning("New key (%s) generated: '%s'" % (name,newkey))
-   new_default_note(k,gr,glob)		# tell user if encryption key changed.
+   gr.new_default_note(k)		# tell user if encryption key changed.
 
    warning("Record this key to avoid data loss!")
    gr.flush_config()
    return True
-
-def new_default_note(ec,cfscope,glob):
-   '''Warn using if the key they just added is now the default key
-   for encryption.'''
-
-   if glob:
-      warning("was stored in global config.")
-   else:
-      warning("was stored in local config.")
-
-   if not ec and cfscope.get_encryption_key():
-      warning("This is now the default key for encryption")
-      if glob:
-         warning("   for global scope (if no local encryption key is set)")
-      else:
-         warning("   for local scope (overrides global and environment).")
 
 def sr_default(keyname,glob):
    'Set the default key for encryption, given key name or finger-print'
@@ -1673,6 +1657,15 @@ class SrGlobal(SrConfig):
       self.srconfig=os.path.join(os.environ['HOME'],'.'+srconfig_file)
       configs = self._read_config()
 
+   def new_default_note(self,ec):
+      '''Warn using if the key they just added is now the default key
+      for encryption.'''
+
+      warning("was stored in global config.")
+
+      if not ec and cfscope.get_encryption_key():
+         warning("This is now the default key for encryption")
+         warning("for global scope (if no local encryption key is set)")
 
 def gitcmd(cmd):
    '''Run git command and return output.
@@ -1822,6 +1815,16 @@ class Gitrepo(SrConfig):
       #
 
       raise NoKeyAvailable(name,None,finger)
+
+   def new_default_note(self,ec):
+      '''Warn using if the key they just added is now the default key
+      for encryption.'''
+
+      warning("was stored in local config.")
+
+      if not ec and self.get_encryption_key():
+         warning("This is now the default key for encryption")
+         warning("for local scope (overrides global and environment).")
 
 # From python 2.7 subprocess.py
 # Remove this later and just use the subprocess implementation.

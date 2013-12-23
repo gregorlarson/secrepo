@@ -1015,6 +1015,11 @@ class TestSecrepo1(UtilityTest):
       gr.delete_key("testkey5")
       finger=sr.create_keyfinger("testkey5")
       self.assertRaises(sr.NoKeyAvailable,gr.find_decryption_key,finger,'testname')
+      gr.flush_config()		# because I am using gr.set_key gr.delete_key
+
+      self.check_clean()
+      gr=sr.git()
+      self.assertRaises(sr.NoKeyAvailable,gr.find_decryption_key,finger,'testname')
 
       gr.set_key("testkey7","newname7")
       self.assertEquals(gr.get_keyname("testkey7"),"newname7")
