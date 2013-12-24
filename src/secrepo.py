@@ -342,10 +342,26 @@ def secrepo_cmd(args):
       help='''Store the enterred key as-is, do not normalize with
       a key derivation function. Note that this option may be removed
       in the future.''')
-   add_p.add_argument('key_name')
+   add_p.add_argument('key_name',
+      help='the name that will be assigned to the new key')
 
    config_p = sp.add_parser('config',
       help='Configure the smudge and diff filters in git repo.')
+
+   config_p.add_argument('--activate','-a',action='store_true',
+      help='''Configure for transparent encryption. This is the
+      `normal` configuration for an encrypted repo with a decrypted
+      workspace.''')
+
+   config_p.add_argument('--decrypt','-d',action='store_true',
+      help='''Configure for decryption only. Files will not be encrypted
+      when added or committed. This is a special-purpose configuration
+      and not for a normal work-flow.''')
+
+   config_p.add_argument('--encrypt','-e',action='store_true',
+      help='''Configure for encryption only. Files will not be decrypted
+      when checked out into workspace. This is a special-purpose configuration
+      and not for a normal work-flow.''')
 
    config_p.add_argument('--nosmudge','-n',action='store_true',
       help='''Remove the smudge/clean filters and add only the
@@ -369,13 +385,16 @@ def secrepo_cmd(args):
    default_p = sp.add_parser('default',
       help='''Change the default key for encryption.
       The key or name must be provided.''')
-   default_p.add_argument('key_selector')
+   default_p.add_argument('key_selector',
+      help='''Provide a name or key finger-print to select the default key
+      for encryption''')
       
    del_p = sp.add_parser('del',
       help='''Delete one or more keys with provided name or key value.
       The keys to be deleted will be displayed and there is a prompt
       for confirmation in order to avoid accidental loss.''')
-   del_p.add_argument('key_selector')
+   del_p.add_argument('key_selector',
+      help='provide a key name or finger-print')
 
    #parser.add_argument('--echo','-e',action='store_true',
    #	help='Echo chars to terminal when entering key.')
@@ -416,7 +435,7 @@ def secrepo_cmd(args):
       Use -g to import to global key-store.''')
       
    # ? no aliases in Python 2.7?
-   listkeys_p = sp.add_parser('lk',			# aliases=['listkeys','list','l'],
+   listkeys_p = sp.add_parser('keys',			# aliases=['listkeys','list','l','lk'],
       help='List the available keys.')
 
    log_p = sp.add_parser('log',
@@ -436,10 +455,12 @@ def secrepo_cmd(args):
 
    name_p = sp.add_parser('name',
       help='''Provide a new name for a key. The first arg is
-      the key (by name or finger-print). The second ard is the
+      the key (by name or finger-print). The second arg is the
       new name.''')
-   name_p.add_argument('key_selector')
-   name_p.add_argument('key_name')
+   name_p.add_argument('key_selector',
+      help='indicate an existing key by name or finger-print')
+   name_p.add_argument('key_name',
+      help='provide the new name for the key')
 
    reset_p = sp.add_parser('reset',
       help='''Use git reset and git status in a special mode to get the
@@ -474,7 +495,7 @@ def secrepo_cmd(args):
       elif	srcmd=='export':	sr_export(glob)
       elif	srcmd=='ienv':		sr_ienv(glob)
       elif	srcmd=='import':	sr_import(glob)
-      elif	srcmd=='lk':		sr_listkeys()
+      elif	srcmd=='keys':		sr_listkeys()
       elif	srcmd=='log':		sr_log(cmdargs.log_parms)
       elif	srcmd=='name':
                 sr_setname(cmdargs.name[0],cmdargs.name[1],glob)
@@ -482,6 +503,9 @@ def secrepo_cmd(args):
       elif	srcmd=='config':
          if	cmdargs.nosmudge:	sr_nosmudge()
          elif	cmdargs.unconfig:	sr_unconfig()
+         elif	cmdargs.decrypt:	sr_config_decrypt()
+         elif	cmdargs.encrypt:	sr_config_encrypt()
+         elif	cmdargs.activate:	sr_config_activate()
          else:	sr_config()
       elif	srcmd=='reset':		sr_reset()
       elif	srcmd=='wipe':		sr_wipe()
@@ -504,15 +528,11 @@ def sr_status():
 
    # TODO: output environment status
 
-def local_status():
-   '''Output local status or raise exception if not available.'''
-   gr=git()
-   keys=gr.get_keys()
-   
-   gc=gconf()
-   gkeys=gc.get_keys()
+def config_status(gr):
+   '''Output configuration status.
+   Used when reporting current status and after a config change.'''
 
-   warning("Configuration:")
+   warning("Current git workspace configuration:")
    v = gr.getconfig('filter.private.clean')
    if v == 'sr_clean':
       warning("   Encryption enabled, filter.private.clean "+v)
@@ -531,35 +551,55 @@ def local_status():
    else:
       warning("   Temporary decryption disabled.")
 
+   warning("   Note that .gitattributes controls which files are affected.")
+   warning("   To see config options use: git secrepo config -h")
+
+def local_status():
+   '''Output local status or raise exception if not available.'''
+   gr=git()
+   keys=gr.get_keys()
+   
+   config_status(gr)
+
+   warning("\nLocal keys:")
    dkey=gr.get_encryption_key()
    if keys:
-      warning("   %d key(s) configured on local repo." % len(keys))
       if dkey:
+         warning("   %d key(s) configured on local repo." % len(keys))
          warning("   The default key for encryption is '%s' name: '%s'"
             % (create_keyfinger(dkey),keys[dkey]))
+      else:
+         warning("   %d key(s) configured on local repo (no default)." % len(keys))
+         warning("   A default key should be selected. See git secrepo default")
+
    else:
       warning("   No keys configured on local repo.")
-      newkey_note()
+      warning("   To enable encryption on this repo, import keys or generate a new")
+      warning("   key using: git secrepo --new default")
 
-   gck=gc.get_encryption_key()
-   if gkeys:
-      warning("   %d key(s) configured globally." % len(gkeys))
-      if gck:
-         warning("   The global default key for encryption is '%s' name: '%s'"
-            % (create_keyfinger(gck),gkeys[gck]))
-      else:
-         warning("   Local repo keys will be used for encryption.")
-   else:
-      warning("   No keys configured globally.")
+   global_status()
 
-   if not dkey and not gck:
+   warning("\nTo list keys, use: git secrepo keys")
+   if not dkey and not gconf().get_encryption_key():
       warning("   There is no default key for encryption.")
       warning("   Files will be added to git unencrypted.")
 
-def newkey_note():
-   '''Output note about adding initial key.'''
-   warning("To enable encryption on this repo, import keys or generate a new")
-   warning("key using: git secrepo --new default")
+def global_status():
+   gc=gconf()
+   gkeys=gc.get_keys()
+   gck=gc.get_encryption_key()
+
+   warning("\nGlobal keys:")
+   if gkeys:
+      if gck:
+         warning("   %d key(s) configured globally." % len(gkeys))
+         warning("   The global default key for encryption is '%s' name: '%s'"
+            % (create_keyfinger(gck),gkeys[gck]))
+      else:
+         warning("   %d key(s) configured globally (no default)." % len(gkeys))
+         warning("   Local repo key will be used for encryption if available")
+   else:
+      warning("   No keys configured globally.")
 
 def sr_add(name,glob,raw):
    '''Allow input of a new key.
@@ -584,10 +624,12 @@ def sr_add(name,glob,raw):
    warning("Note that secrepo does not salt your pass-phrase when encrypting")
    warning("so if your key is something you can memorize, it may not have")
    warning("sufficient entropy to be secure.")
-   if not raw:
+   if raw:
+      warning("Raw keys may not contain spaces, tabs, commas or quotes")
+   else:
       warning("A 256 bit base64 password will be stored as-is, other passwords will")
       warning("be normalized using a determanistic key derivation function so your")
-      warning("plain-text password will not visible in the config files.")
+      warning("plain-text password will not be visible in the config files.")
 
    user_key=user_stdin.readline().strip()
    if not user_key:
@@ -595,6 +637,10 @@ def sr_add(name,glob,raw):
       return False
     
    if raw:
+      if not valid_key(user_key):
+         warning("Not a valid key. Failed.")
+         return False
+
       newkey = user_key
    else:
       # If the user has entered a short key, I can use a key derivation
@@ -664,6 +710,12 @@ def sr_setname(kpat,newname,glob):
    gr.flush_config()
 
 def sr_config():
+   try:
+      config_status(git())
+   except GitFail:
+      warning("The secrepo config command is only valid in a git working tree.")
+
+def sr_config_activate():
    gr=git()
    gr.setconfig('filter.private.smudge','sr_smudge')
    gr.setconfig('filter.private.clean','sr_clean')
@@ -672,6 +724,8 @@ def sr_config():
    warning("Add patterns to .gitattributes to enable encryption.")
    warning("For example:")
    warning("    *.txt filter=private diff=private")
+
+   config_status(gr)
 
    warning('''
    If you enable encryption after adding files, they may not be encrypted.
@@ -707,6 +761,22 @@ def unconfig_note(keys):
      gr.delconfig(c)
 
    return r
+
+def sr_config_decrypt():
+   gr=git()
+   gr.setconfig('filter.private.smudge','sr_smudge')
+   gr.setconfig('diff.private.textconv','sr_diff')
+   unconfig_note(['filter.private.clean'])
+   config_status(gr)
+      
+
+def sr_config_encrypt():
+   gr=git()
+   gr.setconfig('filter.private.clean','sr_clean')
+   gr.setconfig('diff.private.textconv','sr_diff')
+   unconfig_note(['filter.private.smudge'])
+
+   config_status(gr)
 
 def sr_unconfig():
    gr = git()
