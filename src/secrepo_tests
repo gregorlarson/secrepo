@@ -351,6 +351,9 @@ class TestSecrepo1(UtilityTest):
       # Drop the Gitrepo singleton
       sr._git_instance=None
 
+      # Drop the global congif
+      sr._gconf_instance=None
+
       # Reset anything else in module?
       # Hopefully nothing to do here. Perhaps call sr.module_init()
  
@@ -359,6 +362,11 @@ class TestSecrepo1(UtilityTest):
       if sr._git_instance:
          # Detect failure to flush
          self.assertFalse(sr._git_instance._config_changed)
+
+      if sr._gconf_instance:
+         # Detect failure to flush
+         self.assertFalse(sr._gconf_instance._config_changed)
+
       self.sr_cleanup()
 
    def test_edit_missing(self):
@@ -738,6 +746,33 @@ class TestSecrepo1(UtilityTest):
 
       # Check that this key is now default
       self.assertEquals(lkeys[sr.git().get_encryption_key()],'dummyname')
+
+      # Repeat some tests in global context
+      if not sr.gconf().get_keys():
+         # need at least one key
+         sr.gconf().set_key('tempkey_glob','dummy')
+
+      grab_stderr()
+      set_stdin('YES\n')
+      sr.secrepo_cmd(['-g','delall'])
+      check_stderr()
+      self.assertFalse(sr.gconf().get_keys())
+      self.assertEquals(done_stdin(),'')
+
+      self.check_clean()
+      # Try re-reading config from srconfig
+      self.assertFalse(sr.gconf().get_keys())
+
+      grab_stderr()
+      sr.secrepo_cmd(['-g','new','dummyname_glob'])
+      lkeys = sr.gconf().get_keys()
+      self.assertEquals(1,len(lkeys))
+      check_stderr()
+
+      self.check_clean()	# check flush
+
+      # Check that this key is now default
+      self.assertEquals(lkeys[sr.gconf().get_encryption_key()],'dummyname_glob')
 
       self.check_leaks()
 

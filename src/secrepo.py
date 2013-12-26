@@ -281,6 +281,14 @@ def srdiff_cmd(args):
     #
     fn=os.open(cmdargs.file,os_read)
 
+    # In the case were there are binary files (images etc) in the
+    # repo, this filter can cause unwanted junk in the git diff
+    # or git log -p
+    # To avoid this, we would have to inspect the decrypted output
+    # of the smudge filter and substitute a summary line instead.
+    #
+    # As far as I know, there is no way to 'chain' multiple filters.
+
     out_file=sys.stdout.fileno()
     if is_windoz:
        # For windows, std stdout to binary.
@@ -737,7 +745,7 @@ def sr_config_activate():
    Note that files committed unencrypted will remain unencrypted.''')
 
    if not gr.get_keys():
-      warning("Use git-secrepo --new or --add to install keys.")
+      warning("Use git-secrepo new or add to install keys.")
 
 def sr_nosmudge():
    'Remove smudge/clean filters but leave diff.'
@@ -763,6 +771,7 @@ def unconfig_note(keys):
    return r
 
 def sr_config_decrypt():
+   '''Decrypt-only configuration.'''
    gr=git()
    gr.setconfig('filter.private.smudge','sr_smudge')
    gr.setconfig('diff.private.textconv','sr_diff')
@@ -771,10 +780,10 @@ def sr_config_decrypt():
       
 
 def sr_config_encrypt():
+   '''Encrypt-only configuration.'''
    gr=git()
    gr.setconfig('filter.private.clean','sr_clean')
-   gr.setconfig('diff.private.textconv','sr_diff')
-   unconfig_note(['filter.private.smudge'])
+   unconfig_note(['filter.private.smudge','diff.private.textconv'])
 
    config_status(gr)
 
@@ -1264,7 +1273,12 @@ def sr_reset():
 def srclean_cmd(args):
    '''sr_clean command. Encrypt with header, stdin to stdout.
    If, for some reason, input has a valid header, then pass it
-   unchanged. If no default key for encryption is available,
+   unchanged. This has the implication that srclean will not,
+   change the encryption key for a file that is already encrypted
+   unless you first decrypt that file (using a sr_smudge or
+   git-secrepo decrypt).
+   
+   If no default key for encryption is available,
    return failure (rc=2). Must return 0 to indicate success.
    
    Note that git uses the clean filter to bring a file from the
@@ -1306,6 +1320,8 @@ def srclean_cmd(args):
    # will compress / encrypt later if it turns out this file does
    # not have a header.
    inbuf=os.read(in_file,header_size)
+
+   # This is not the header, it is a log mode hack
    if inbuf[:8] == 'secrepo ':
       sr_log_mode = False	# logged already
 
@@ -1733,7 +1749,7 @@ class SrGlobal(SrConfig):
 
       warning("was stored in global config.")
 
-      if not ec and cfscope.get_encryption_key():
+      if not ec and self.get_encryption_key():
          warning("This is now the default key for encryption")
          warning("for global scope (if no local encryption key is set)")
 
