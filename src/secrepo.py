@@ -59,6 +59,9 @@ debug_level=0
 # Size of header for encrypted files.
 header_size=64
 
+# Current default version for encryption
+default_version=1
+
 # May be modified for unit-testing
 default_editor=['vim']
 
@@ -152,11 +155,6 @@ def module_main():
     global flags_quiet
     if os.environ.get('SECREPO_QUIET'):
        flags_quiet=True
-    elif os.environ.get('GIT_COMMIT'):
-       # If GIT_COMMIT is set, we assume we are in a tree-filter where
-       # we probably don't want huge amounts of output.
-       if (debug_level==0) and not flags_verbose:
-          flags_quiet=True
 
     # Allow redirection of stderr by unit-tests.
     global stderr
@@ -260,6 +258,11 @@ def process_generic_args(args,aparser):
 
     global flags_quiet
     if pargs.quiet: flags_quiet=True
+    elif os.environ.get('GIT_COMMIT'):
+       # If GIT_COMMIT is set, we assume we are in a tree-filter where
+       # we probably don't want huge amounts of output.
+       if (debug_level==0) and not flags_verbose:
+          flags_quiet=True
 
     #global debug_level
     #if pargs.debug: debug_level=pargs.debug
@@ -530,7 +533,7 @@ def secrepo_cmd(args):
       elif	srcmd=='encrypt':	sr_encrypt()
       elif	srcmd=='env':		sr_env()
       elif	srcmd=='export':	sr_export(glob)
-      elif	srcmd=='ienv':		sr_ienv(glob)
+      elif	srcmd=='ienv':		sr_ienv()
       elif	srcmd=='import':	sr_import(glob)
       elif	srcmd=='keys':		sr_listkeys()
       elif	srcmd=='log':		sr_log(cmdargs.log_parms)
@@ -1119,6 +1122,7 @@ def sr_listkeys(lmatch=None):
       return 0
 
    fp=create_keyfinger
+   edefault,edname = env_encryption_key()
 
    form=" %-22s %-14s %-18s"
    warning(form % ('Key Name','Finger Print','Scope'))
@@ -1130,7 +1134,10 @@ def sr_listkeys(lmatch=None):
       gname=None
       if t in envkeys:
          ename=envkeys[t]
-         scope=['Env']
+         if t == edefault:
+            scope=['Env(d)']
+         else:
+            scope=['Env']
       if t in lkeys:
          lname=lkeys[t]
          if t == ldefault:
@@ -1282,6 +1289,21 @@ def env_decryption_key(finger):
       return key
    return None
 
+def env_encryption_key():
+   '''Return a key and name from environment that is indicated
+   as default key for encryption, or, None,None.'''
+   env_default = os_environ.get("SECREPO_DEFAULT")
+   if not env_default: return None,None
+
+   key = os_environ.get("SRK_"+env_default)
+   if not key: return None,None
+   if not valid_key(key): return None,None
+
+   name = os_environ.get("SRN_"+env_default)
+   if not valid_name(name):
+      name='envdefault'
+   return key,name
+
 def sr_wipe():
     'Wipe temporary environment keys. Bourne/posix commands to stdout.'
     count=0
@@ -1323,14 +1345,27 @@ def srclean_cmd(args):
    global sr_log_mode
    global sr_reset_mode
 
-   try:
-      parser=generic_args()
-      cmdargs=process_generic_args(args,parser)
-      gr = git()
-      key,name = gr.default_key()	# raises exception if not found
-   except NoKeyAvailable as e:
-      e.report()
-      return 2		# exit 2 to indicate to git that clean failed.
+   parser=generic_args()
+   cmdargs=process_generic_args(args,parser)
+
+   # Note that a default key in the environment will override
+   # the default key in the repo.
+   key,name = env_encryption_key()
+   if key:
+      if not flags_quiet:
+         # Because we are encrypting to an environment key, we warn
+         # the user. This is not a common scenario.
+         warning("secrepo: Using encryption key from environment.")
+      version = default_version
+      gr = None
+   else:
+      try:
+         gr = git()
+         key,name = gr.default_key()	# raises exception if not found
+         version=gr.default_version
+      except NoKeyAvailable as e:
+         e.report()
+         return 2		# exit 2 to indicate to git that clean failed.
 
    # Other exceptions from this function just fall out to user terminal.
 
@@ -1346,7 +1381,7 @@ def srclean_cmd(args):
       msvcrt.setmode(in_file, os.O_BINARY)
       msvcrt.setmode(out_file, os.O_BINARY)
 
-   header = Header(version=gr.default_version,keyname=name,key=key)
+   header = Header(version=version,keyname=name,key=key)
 
    # We read the initial bytes of the file into a buffer which we
    # will compress / encrypt later if it turns out this file does
@@ -1385,7 +1420,8 @@ def srclean_cmd(args):
       # similar to log_mode that treats already encrypted files specially.
       #
       key=None
-      try:
+      if gr:
+       try:
          key=gr.find_decryption_key(hcheck.keyfinger,hcheck.keyname)
          if sr_reset_mode:
             sr_log_mode=True
@@ -1397,7 +1433,7 @@ def srclean_cmd(args):
             warning("\nsecrepo: Encrypted file(s) in working tree. You may need to reset --hard")
             warning("         or, delete the affected files from your working tree, or")
             warning("         use secrepo decrypt")
-      except NoKeyAvailable:
+       except NoKeyAvailable:
          pass
 
       # Pass the file as-is
@@ -1419,7 +1455,7 @@ def srclean_cmd(args):
    header.write(out_file)
 
    # Supply the prefix bytes already read in order to avoid a pipe here.
-   cipher(gr.default_version).encrypt_stream_to_stream(in_file,key,out_file,prefix=inbuf)
+   cipher(version).encrypt_stream_to_stream(in_file,key,out_file,prefix=inbuf)
 
    return 0	# exit 0
 
@@ -1585,7 +1621,7 @@ class SrConfig:
       # It is possible I could allow default version to be overridden
       # per repo (seems unlikely however).
       #
-      self.default_version=1
+      self.default_version=default_version
 
       # To speed the secrepo decrypt command which handles multiple files
       # we create a faster map from key finger-print to key.
