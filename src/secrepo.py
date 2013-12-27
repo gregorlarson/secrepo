@@ -612,7 +612,7 @@ def local_status():
    else:
       warning("   No keys configured on local repo.")
       warning("   To enable encryption on this repo, import keys or generate a new")
-      warning("   key using: git secrepo --new default")
+      warning("   key using: git secrepo new default")
 
    global_status()
 
