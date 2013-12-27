@@ -9,7 +9,7 @@ I have not created a formal install or package and this point.
 
 ```sh
 cd src
-chmod 755 sr_* git-secrepo secrepo_test
+chmod 755 sr* git-secrepo secrepo_test
 cp * /usr/local/bin/
 cd ../test/
 secrepo_tests
@@ -18,7 +18,7 @@ secrepo_tests
 ### User Install
 ```sh
 cd src
-chmod 755 sr_* git-secrepo secrepo_test
+chmod 755 sr* git-secrepo secrepo_test
 cp * ~/bin/
 cd ../test/
 secrepo_tests

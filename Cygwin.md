@@ -6,6 +6,17 @@ You need to install:
    * `python` version 2.7.x
    * `python-crypto`
 
+
+### Root Install
+
+```sh
+cd src
+chmod 755 sr* git-secrepo secrepo_test
+cp * /usr/local/bin/
+cd ../test/
+secrepo_tests
+```
+
 ## Cygwin Permissions
 
 `chmod 0600` appears to map to something reasonable in NTFS security, so for now, that is how we protect `{git}/secrepo` and `~/.secrepo`.
