@@ -155,7 +155,7 @@ def module_main():
     elif os.environ.get('GIT_COMMIT'):
        # If GIT_COMMIT is set, we assume we are in a tree-filter where
        # we probably don't want huge amounts of output.
-       if not debug_level and not flags_verbose:
+       if (debug_level==0) and not flags_verbose:
           flags_quiet=True
 
     # Allow redirection of stderr by unit-tests.
