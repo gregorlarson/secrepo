@@ -33,6 +33,8 @@ else:
 
 # More output
 flags_verbose=False
+# Less output
+flags_quiet=False
 
 # secrepo log mode
 sr_log_mode=False
@@ -143,14 +145,28 @@ def module_main():
        global debug_level
        debug_level=int(d)
 
+    global flags_verbose
+    if os.environ.get('SECREPO_VERBOSE'):
+       flags_verbose=True
+
+    global flags_quiet
+    if os.environ.get('SECREPO_QUIET'):
+       flags_quiet=True
+    elif os.environ.get('GIT_COMMIT'):
+       # If GIT_COMMIT is set, we assume we are in a tree-filter where
+       # we probably don't want huge amounts of output.
+       if not debug_level and not flags_verbose:
+          flags_quiet=True
+
     # Allow redirection of stderr by unit-tests.
     global stderr
     stderr=sys.stderr
     global user_stdin
-    # user_stdin is used interactive user input
+    # user_stdin is used for interactive user input
     user_stdin=sys.stdin
 
     if 'SR_LOGMODE' in os.environ:
+        # see git-secrepo log -h
         global sr_log_mode
         sr_log_mode=True
 
@@ -228,16 +244,22 @@ def generic_args(description=None,epilog=None):
     import argparse
     parser = argparse.ArgumentParser(description=description,epilog=epilog)
     #parser.add_argument("--debug", type=int, help="set the debug level")
-    parser.add_argument("-v","--verbose", action="store_true",
+    parser.add_argument("--verbose","-v",action="store_true",
        help="enable verbose output")
+    parser.add_argument("--quiet","-q",action="store_true",
+       help="reduce output")
     return parser
 
 def process_generic_args(args,aparser):
     '''process cmdline args applicable to all commands.'''
 
     pargs = aparser.parse_args(args)
+
     global flags_verbose
     if pargs.verbose: flags_verbose=True
+
+    global flags_quiet
+    if pargs.quiet: flags_quiet=True
 
     #global debug_level
     #if pargs.debug: debug_level=pargs.debug
@@ -249,7 +271,7 @@ def sredit_cmd(args):
     parser=generic_args()
     parser.add_argument("file",type=str)
     cmdargs=process_generic_args(args,parser)
-    debug_log(2,'sredit_cmd',cmdargs)
+    if debug_level: debug_log(2,'sredit_cmd',cmdargs)
     if file_is_encrypted(cmdargs.file):
        try:
           sredit_encrypted(cmdargs.file)
@@ -294,7 +316,8 @@ def srdiff_cmd(args):
        # For windows, std stdout to binary.
        msvcrt.setmode(out_file, os.O_BINARY)
 
-    debug_log(2,'srdiff_cmd %s -> %d' % (cmdargs.file, out_file), cmdargs)
+    if debug_level:
+       debug_log(2,'srdiff_cmd %s -> %d' % (cmdargs.file, out_file), cmdargs)
     try:
        smudge_filter(fn,out_file)
        return 0		# exit 0
@@ -389,6 +412,11 @@ def secrepo_cmd(args):
    decrypt_p.add_argument('-infile','-f',dest='filename',
       help='''Specify a single file to be decrypted rather than a list
       from stdin.''')
+
+   encrypt_p = sp.add_parser('encrypt',
+      help='''Does not actually encrypt files, but rather checks for an
+      encryption header and touches (updates mtime) on non-encrypted files.
+      For use in tree-filers with git-ls-files. Reads filenames from stdin''')
 
    default_p = sp.add_parser('default',
       help='''Change the default key for encryption.
@@ -499,6 +527,7 @@ def secrepo_cmd(args):
       elif      srcmd=='default':	sr_default(cmdargs.key_selector,glob)
       elif	srcmd=='del':		sr_del(cmdargs.key_selector,glob)
       elif	srcmd=='delall':	sr_delall(glob)
+      elif	srcmd=='encrypt':	sr_encrypt()
       elif	srcmd=='env':		sr_env()
       elif	srcmd=='export':	sr_export(glob)
       elif	srcmd=='ienv':		sr_ienv(glob)
@@ -727,6 +756,8 @@ def sr_config_activate():
    gr=git()
    gr.setconfig('filter.private.smudge','sr_smudge')
    gr.setconfig('filter.private.clean','sr_clean')
+   # Should we do gr.setconfig('filter.private.required', 'true')
+
    gr.setconfig('diff.private.textconv','sr_diff')
 
    warning("Add patterns to .gitattributes to enable encryption.")
@@ -1303,7 +1334,8 @@ def srclean_cmd(args):
 
    # Other exceptions from this function just fall out to user terminal.
 
-   debug_log(2,"srclean key='%s' name='%s'" % (key,name))
+   if debug_level:
+      debug_log(2,"srclean key='%s' name='%s'" % (key,name))
 
    # We use raw file input, but this might muck-up sys.stdin/out
    # so try not to use sys.stdin/out for anything else.
@@ -1333,12 +1365,14 @@ def srclean_cmd(args):
          # header parse failed, so assume not already encrypted.
          pass
    else:
-      debug_log(1,'srclean only %d bytes recieved.' % len(inbuf))
+      if debug_level:
+         debug_log(1,'srclean only %d bytes recieved.' % len(inbuf))
       # With less than header_size bytes it can't already be encrypted
       # because there is not a valid header.
 
    if hcheck:
-      debug_log(1,"clean already encrypted input")
+      if debug_level:
+         debug_log(1,"clean already encrypted input")
       # We warn the user if we have the key to decrypt this file,
       # but for some reason it is encrypted in the working tree.
       # We can't really fix the problem here because git is using
@@ -1356,7 +1390,10 @@ def srclean_cmd(args):
          if sr_reset_mode:
             sr_log_mode=True
 
-         if not sr_log_mode:
+         # The following can produce excess output during filter-branch.
+         # For now, use SECREPO_QUIET=1 git filter-branch ....
+         #
+         if not sr_log_mode and not flags_quiet:
             warning("\nsecrepo: Encrypted file(s) in working tree. You may need to reset --hard")
             warning("         or, delete the affected files from your working tree, or")
             warning("         use secrepo decrypt")
@@ -1437,7 +1474,8 @@ def srsmudge_cmd(args):
       msvcrt.setmode(in_fn, os.O_BINARY)
       msvcrt.setmode(out_fn, os.O_BINARY)
 
-   debug_log(2,"srmudge_cmd in=%d, out=%d" % (in_fn,out_fn))
+   if debug_level:
+      debug_log(2,"srmudge_cmd in=%d, out=%d" % (in_fn,out_fn))
    try:
       smudge_filter(in_fn,out_fn)
       return 0			# exit 0 to git
@@ -1470,8 +1508,10 @@ def smudge_filter(in_file,out_file):
       sr_log_mode = False	# logged already
 
    if len(inbuf) < header_size:
-      debug_log(1,"srsmudge only %d bytes recieved." % len(inbuf))
+      if debug_level:
+         debug_log(1,"srsmudge only %d bytes recieved." % len(inbuf))
       if sr_log_mode:
+         # In special log mode, we output only a summary line.
          sr_log_unenc(out_file,len(inbuf))
          return True
 
@@ -1490,13 +1530,14 @@ def smudge_filter(in_file,out_file):
 
    if not header:
       # If no header was seen, the input is not encrypted.
-      debug_log(1,"smudge unencrypted input")
-      size = 64
+      if debug_level: debug_log(1,"smudge unencrypted input")
+      size = len(inbuf)
       if not sr_log_mode:
          # pass the file as-is
          os.write(out_file,inbuf)
 
       inbuf = os.read(in_file,32768-header_size)	# align
+      size = size + len(inbuf)
       while inbuf:
          if not sr_log_mode:
             os.write(out_file,inbuf)
@@ -1504,6 +1545,7 @@ def smudge_filter(in_file,out_file):
          size = size + len(inbuf)
 
       if sr_log_mode:
+         # In special log-mode, output only a summary.
          sr_log_unenc(out_file,size)
          return True
 
@@ -1766,6 +1808,15 @@ def gitcmd(cmd):
 
 def gitdir():
    'Get the git repo director, or raise GitFail.'
+
+   # For now, we allow the environment variable to override. This
+   # will also perform better in a tree-filter.
+   git_dir = os.environ.get("GIT_DIR")
+
+   if git_dir:
+      if debug_level: debug_log(2,"GIT_DIR: "+git_dir)
+      return git_dir
+
    try:
       git_dir = gitcmd(['rev-parse','--git-dir'])
    except CalledProcessError as e:
@@ -1987,7 +2038,7 @@ def edit_existing_file(editfile):
     else:
        editor_cmd = default_editor
 
-    debug_log(1,"Using editor:",editor_cmd)
+    if debug_level: debug_log(1,"Using editor:",editor_cmd)
 
     orig_sum=file_md5sum(editfile)
 
@@ -2138,7 +2189,7 @@ class StreamCipher:
 
          # No more compressed data.
          stat.record_success()
-         debug_log(1,"decompress success in: %d out: %d" %
+         if debug_level: debug_log(1,"decompress success in: %d out: %d" %
 	      (stat.inbytes,stat.outbytes))
 
       except zlib.error as e:
@@ -2157,7 +2208,7 @@ class StreamCipher:
       # outfile may be stdout, so we can't really close it here,
 
    def encrypt_stream_to_stream(self,instream,key,fstream,prefix=None):
-      debug_log(2,"encrypt:",instream,key,fstream)
+      if debug_level: debug_log(2,"encrypt:",instream,key,fstream)
 
       (ssl_read_pipe,gzip_write_pipe) = os.pipe()
 
@@ -2248,14 +2299,15 @@ class StreamCipher:
     gzthread.join()
 
     if not dstatus.success:
-       debug_log(1,"gunzip did not complete (%d output)" % dstatus.outbytes)
+       if debug_level:
+          debug_log(1,"gunzip did not complete (%d output)" % dstatus.outbytes)
        # It is possible that gunzip failed because the decryption
        # failed. In any case, we are not going to get any useful output.
        raise DecryptFail('_v1 gunzip outbytes=%d' %
 		dstatus.outbytes,dstatus.exception)
 
     if dstatus.outbytes == 0:
-       debug_log(1,"no output. Input: %d" % dstatus.inbytes)
+       if debug_level: debug_log(1,"no output. Input: %d" % dstatus.inbytes)
 
     if decrypt_success: return
 
@@ -2518,6 +2570,45 @@ class Header:
         return "uninitalized"
      return "version: %d name: %s fp: %s" % (self.version,self.keyname,self.keyfinger)
 
+def sr_encrypt():
+   '''Touch non-encrypted files (read list from stdin) so git will pick it
+   up and encrypt it.'''
+   if flags_verbose: warning("Reading filenames from stdin:")
+   errors=0
+   touched=0
+   encrypted=0
+   for x in sys.stdin.readlines():
+      filename=x.strip()	# readlines puts \n on the end?
+      if filename:	# skip blank lines
+         try:
+            if not os.path.islink(filename):
+               if file_is_encrypted(filename):
+                  encrypted += 1
+               else:
+                  os.utime(filename,None)
+                  touched += 1
+
+         except SrException as e:
+            errors += 1
+            if debug_level:
+               e.report()
+
+         except OSError as e:
+            errors += 1
+            if debug_level:
+               warning("During `encrypt` '%s'" % filename,exception=e)
+
+         except IOError as e:
+            errors += 1
+            if debug_level:
+               warning("During `encrypt` '%s'" % filename,exception=e)
+
+   if not flags_quiet:
+      warning("Encrypt complete:")
+      warning("   Errors:            %6d" % errors)
+      warning("   Already Encrypted: %6d" % encrypted)
+      warning("   Touched:           %6d" % touched)
+
 def sr_decrypt(filename):
    '''Decrypt a file in-place.'''
    if filename:
@@ -2532,6 +2623,9 @@ def sr_decrypt(filename):
          elif rc == 2:
             warning("%s is not encrypted. No changes made." % filename)
             return
+         elif rc == 3:
+            warning("%s is symlink. No changes made." % filename)
+            return
 
          # decrypt_file() reported error message
          return
@@ -2542,11 +2636,12 @@ def sr_decrypt(filename):
    #
    # Multiple File Mode
    #
-   warning("Reading filenames from stdin:")
+   if flags_verbose: warning("Reading filenames from stdin:")
    errors=0
    success=0
    not_encrypted=0
    missing_key=0
+   ignored=0
 
    missing_keys=dict()
    for x in sys.stdin.readlines():
@@ -2555,40 +2650,49 @@ def sr_decrypt(filename):
        try:
          rc = decrypt_file(filename)
          if rc == 0:
-            success=success+1
+            success +=1
          elif rc == 2:
-            not_encrypted=not_encrypted+1
+            not_encrypted +=1
+         elif rc == 3:
+            ignored +=1
          else:
-            errors=errors+1
+            errors +=1
 
        except NoKeyAvailable as e:
          missing_keys[e.args[2]]=e.args[0]
-         missing_key=missing_key+1
-         warning("Missing key for "+filename)
+         missing_key +=1
+         if not flags_quiet: warning("Missing key for "+filename)
 
-   warning("Completed decryption operation:")
-   warning("   %-4d files decrypted." % success)
-   warning("   %-4d files not encrypted (no change made)" % not_encrypted)
-   warning("   %-4d files no decryption key available." % missing_key)
-   warning("   %-4d other errors." % errors)
+   if not flags_quiet:
+      warning("Completed decryption operation:")
+      warning("   %-4d files decrypted." % success)
+      warning("   %-4d files not encrypted (no change made)" % not_encrypted)
+      warning("   %-4d files no decryption key available." % missing_key)
+      warning("   %-4d other errors." % errors)
 
-   if missing_keys:
-      form = '%-14s %-20s %-14s'
-      warning(form % ('Missing keys:','Name','Finger Print'))
-      warning(form % ('',             '----','------------'))
-      for k in missing_keys:
-         warning(form % ('',missing_keys[k],create_keyfinger(k)))
+      if missing_keys:
+         form = '%-14s %-20s %-14s'
+         warning(form % ('Missing keys:','Name','Finger Print'))
+         warning(form % ('',             '----','------------'))
+         for k in missing_keys:
+            warning(form % ('',missing_keys[k],create_keyfinger(k)))
 
 def decrypt_file(filename):
    '''Decrypt a file in-place.
    Return 0 for success.
    Return 1 for error.
-   Return 2 for not encrypted.'''
+   Return 2 for not encrypted.
+   Return 3 for not a plain file (symlink)'''
 
    tmp=filename+'.tmp'
 
+   if os.path.islink(filename):
+      # Because we are doing in-place decryption it is not appropriate
+      # to follow symlinks.
+      return 3
+
    if not os.path.isfile(filename):
-      warning("no such file: "+filename)
+      if not flags_quiet: warning("no such file: "+filename)
       return 1
 
    infile = open(filename,'rb')
@@ -2683,7 +2787,9 @@ def get_edit_key(finger,name):
    git repo, we do not try and access Gitrepo.
    An exception is raised if no key is found.'''
 
-   debug_log(2,'get_edit_key: fp: %s name: %s' % (finger,name))
+   if debug_level:
+      debug_log(2,'get_edit_key: fp: %s name: %s' % (finger,name))
+
    if not name:
       # There has to be some name if we want to re-encrypt
       # the file after editing.
@@ -2731,7 +2837,7 @@ def read_config(filename):
             if v[0] == "'": v = v[1:-1] # remove quotes
             if len(prev) > 4 and prev[:4] == 'key_':
                k = split_fields(v)
-               # debug_log(2,"keyline '%s'" % prev,k)
+               if debug_level: debug_log(3,"keyline '%s'" % prev,k)
                # Store keys in key dictionary
                if len(k) == 1:
                   keys[k[0]] = None	# no name provided
