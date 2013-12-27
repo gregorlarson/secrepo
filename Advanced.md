@@ -16,8 +16,8 @@ If you have never used filter-branch before, please be aware that this is a reas
 ### Migrating Non-Encrypted to Encrypted History
 Create your `.gitattributes` file and copy to a temp file (/tmp/ga)'. The first history re-write is to insert the new `.gitattributes` file.
 ```sh
-# config --all seems to perform a bit better than config --encrypt
-git secrepo config -a
+# config --encrypt seems to perform a bit better than config --all
+git secrepo config -e
 # Note that the following filters can take hours to run on a large repo with a lot of history.
 #
 git filter-branch -f --tree-filter 'cp -f /tmp/ga .gitattributes'
