@@ -66,7 +66,7 @@ def derive_key_and_iv(password, salt, key_length, iv_length):
     return d[:key_length], d[key_length:key_length+iv_length]
 ```
 
-Using the same key and iv derivation as openssl has the advantage of compatibilty.
+Using the same key and iv derivation as openssl has the advantage of compatibility. OpenSSL is mature and been around a long time where as SecRepo and PyCrypto are much more recent with smaller design and user communities. Because a Git repo history can have a very long lifespan, it is valuable that files be accessible with independently developed tools.
 For example, you can decrypt a SecRepo encrypted file with openssl by stripping the
 64 byte header and using the openssl program and gzip:
 ```sh

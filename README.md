@@ -1,10 +1,12 @@
-# SecRepo (Prototype)
-## Prototype Warning
-I am still working out a few things with this script so you are free to play with it but be aware that you should be careful with it and also be prepared to re-write some history in your repo (I will of course try and avoid this).
-Any feedback or ideas on usability is welcome, thanks!
-
+# SecRepo
 ## Transparent Git Repo Encryption
 Encrypted files in the Git repo are transparently decrypted in your workspace using Git smudge/clean and text filters.
+
+## Safe Usage Warning
+This script is still fairly new, which means there is some new-adoption risk. Any feedback or ideas on usability is welcome, thanks!
+
+### Crypto Warning
+Like any high-strength crypto tool, you need to be aware that if you loose your key, your data *cannot* be recovered. The developer does not have any special back-door or administrative access.
 
 ## Install
 See platform-specific notes:
@@ -25,7 +27,7 @@ To list the keys use: `git secrepo keys`
 ## Configuring Filters
 Secrepo works by configuring filters in your git configuration. You also need to activate these filters in you git working tree in `.gitattributes`. A sub-command `git secrepo config` handles git configurations.
    * `git secrepo config -a` enables all the filters
-   * `git secrepo config -n` enables only the textconv filters. Use this when working with encrypted repos.
+   * `git secrepo config -n` enables only the textconv filters. Use this when working without keys (in an encrypted working tree).
    * `git secrepo config -u` disables the secrepo filters.
 
 There are a couple non-standard configurations that I plan to use for maintaining separate encrypted / decrypted branches.  These configurations are sometimes what you want if you are re-writing history using a tree-filter in order to create a decrypted or encrypted branch.

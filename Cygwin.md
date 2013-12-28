@@ -6,15 +6,33 @@ You need to install:
    * `python` version 2.7.x
    * `python-crypto`
 
+### Clone
+```sh
+git clone https://github.com/gregorlarson/secrepo.git
+cd secrepo
+```
 
-### Root Install
+### Install
 
 ```sh
 cd src
-chmod 755 sr* git-secrepo secrepo_test
+chmod 755 sr* git-secrepo secrepo_tests
 cp * /usr/local/bin/
 cd ../test/
 secrepo_tests
+```
+
+### Alternate install using symlinks
+Useful if you want to be able to update/pull changes and have them be live automatically.
+```sh
+cd src
+# Cygwin python 2.7 may not find modules symlinked into bin
+# in the same way Linux does.
+ln -s $PWD/secrepo.py /usr/lib/python2.7/site-packages/
+for f in sr* git* secrepo_tests; do
+   chmod 755 $f
+   ln -s $PWD/$f /usr/local/bin/
+done
 ```
 
 ## Cygwin Permissions
