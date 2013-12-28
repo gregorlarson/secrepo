@@ -8,6 +8,11 @@ This script is still fairly new, which means there is some new-adoption risk. An
 ### Crypto Warning
 Like any high-strength crypto tool, you need to be aware that if you loose your key, your data *cannot* be recovered. The developer does not have any special back-door or administrative access.
 
+## Why would I use SecRepo?
+Git is a great tool for tracking changes and synchronizing multiple work-spaces, however, to really take advantage of git you may want to have a _bare_ repo in the cloud, that you can access from any-where. Github is one example of this. You could also keep your bare repo on a small server on AWS or another cloud provider (this an approach I use). They problem is, you may have some sensitive files in your repo and cloud data is never completely under your control. Also, you might want to publish the contents of your repo, but keep a few files private due to an NDA or because they include name/contact details you do not have permission to publish. You may want a client or contractor to be able to access a repo but still keep some files private.
+
+SecRepo is designed to mitigate these problems by allowing your bare repo to contain encrypted data that is transparently decrypted in *your* workspace, provided you have the correct keys installed. SecRepo does not prevent someone without the keys from cloning the repo, however, the encrypted files will not be decrypted without the correct keys. Only the encrypted file(s) will in that workspace.
+
 ## Install
 See platform-specific notes:
    * Linux.md
@@ -16,13 +21,33 @@ See platform-specific notes:
 
 ## git secrepo
 The main interface to secrepo is via the `git-secrepo` command in your bin which is also accessed as `git secrepo`.
-To see the available options and subcommands do:
+To see the available options and sub-commands do:
    * `git secrepo -h`
-   * `git secrepo subcmd -h`
+   * `git secrepo {command} -h`
 
-## Basic Key Management
+## Key Management and Security
+SecRepo will retrieve keys from:
+   * the local git repo, file {GIT_DIR}/srconfig
+   * a global config name .srconfig in your home directory
+   * environment variables
+   * in a future version, I may allow keys to be retrieved from an independent keyring which is somewhat safer than a file on disk. For example:
+      * gnome keyring
+      * Linux kernel key retention service https://www.kernel.org/doc/Documentation/security/keys.txt
+      * Other ideas for safer key storage? Let me know.
+
+### Basic Key Management
 To add a first key to your repo use: `git secrepo new default`
 To list the keys use: `git secrepo keys`
+
+### Key Security
+It is *not* intended that secrepo provides the same level of security as a password vault or encrypted volume where the decryption keys are memorized by the user never stored on disk.
+SecRepo encryption is really only as secure as the machine where you use the keys and keep the decrypted working tree.
+Your SecRepo keys *are* stored on disk. This is necessary so that git is usable without frequent password prompts.
+
+The srconfig files where your keys are stored are protected, however, an administrative user on your machine *will* be able to access your keys, also, your keys may be retrievable from a regular filesystem backup. If someone steals your keys, and they have access to the encrypted (bare) repo, they may be able to access the contents of your repo for an extended period, without your knowledge (including new commits) until your change your keys.
+
+#### Stonger Security Ideas
+If you are putting really sensitive information into a Git repo, you probably want to keep your working tree (checked out Git files) and SecRepo keys on an encrypted volume such as Truecrypt or LUKS or NTFS encryption. You also would want to control access to your bare repo (in the cloud) as must as possible (only allow ssh access and create separate keys for each legitimate user).  You probably want to change the SecRepo encryption key after revoking access for a user.
 
 ## Configuring Filters
 Secrepo works by configuring filters in your git configuration. You also need to activate these filters in you git working tree in `.gitattributes`. A sub-command `git secrepo config` handles git configurations.
