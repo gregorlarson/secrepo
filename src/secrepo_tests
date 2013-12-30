@@ -372,7 +372,6 @@ class TestSecrepo1(UtilityTest):
 
       # Reset anything else in module?
       # Hopefully nothing to do here. Perhaps call sr.module_init()
-      sr.env_slots=set()
       sr.kf_cache=dict()
 
       # Environment cleanup
@@ -981,20 +980,17 @@ class TestSecrepo1(UtilityTest):
       # env slots are filled in order, so make a space at 2
       ev = sr.os_environ
       ev['SRK_1']='envinuse'
-      if 'SRK_2' in ev:
-         del ev['SRK_2']
-      if 'SRK_3' in ev:
-         del ev['SRK_3']
 
       grab_stderr()
-      self.stdio_capture('newenvkey1\nnewenvkey2 newname2')
-      sr.secrepo_cmd(['env'])
-      sr.secrepo_cmd(['env'])
+      self.stdio_capture('newenvkey1\nnewenvkey2\n')
+      sr.secrepo_cmd(['-e','add','-r','newename1'])
+      sr.secrepo_cmd(['-e','add','newename2'])
       self.stdio_capdone()
+      ##print('test_sr_env:\n',self.stdout_results)
       self.stdout_results.index("export SRK_2='newenvkey1';")
-      self.stdout_results.index("export SRK_3='newenvkey2';")
-      self.stdout_results.index("export SRN_3='newname2';")
-      self.stdout_results.index("unset SRN_2;")
+      self.stdout_results.index("export SRN_2='newename1';")
+      self.stdout_results.index("export SRK_3='FDI2pfImb") #normalized part
+      self.stdout_results.index("export SRN_3='newename2';")
       check_stderr()
 
       self.stdio_capture('')

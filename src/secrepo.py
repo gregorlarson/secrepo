@@ -49,7 +49,7 @@ if sys.platform[:3] == 'win':
    # write files without any text-mapping.
    os_create=os.O_WRONLY|os.O_CREAT|os.O_BINARY
    os_read=os.O_RDONLY|os.O_BINARY
-   os_overwrite=os.O_WRONLY|os.O_BINARY		 # overwrite a file in-place
+   os_overwrite=os.O_WRONLY|os.O_BINARY		# overwrite a file in-place
 else:
    os_environ = os.environ
    is_windoz = False
@@ -236,7 +236,7 @@ def module_main():
        # is changed to ['sh','fake editor script']
        #
        default_editor=[
-       	'C:\\Program Files (x86)\\Git\\share\\vim\\vim73\\vim.exe']
+          'C:\\Program Files (x86)\\Git\\share\\vim\\vim73\\vim.exe']
        if not os.path.isfile(default_editor[0]):
           default_editor=['notepad']
 
@@ -474,16 +474,6 @@ def secrepo_cmd(args):
       of keys is displayed with a confirmation prompt in order to
       avoid accidental loss.''')
 
-   env_p = sp.add_parser('env',
-      help='''Using command: eval `git-secrepo env` you are prompted
-      for key and optional name which will be exported into environment
-      for temporary use. Note that other users on this machine may be
-      able to access your envronment variables. This works only for
-      bourne/bash/posix style shells. The sredit command might be
-      slightly more secure than this if you a looking at a single
-      file in an encrypted workspace. To import multiple keys
-      to the evironment see the ienv subcommand below.''')
-
    export_p = sp.add_parser('export',
       help='''Export keys to to stdout for use with import
       Add -g to include global keys as well.''')
@@ -492,6 +482,15 @@ def secrepo_cmd(args):
       help='''Affect the global key-store in ~/.secrepo instead of the
       local git config. Works for add, new, del, delall, import, export,
       default, name''')
+
+   parser.add_argument('--env','-e',action='store_true',
+      help='''Affect environment variables instead of configuration on disk.
+      See also the sredit command if you need to edit only a single file.
+      Be aware that on some systems, environment variables are not completely
+      private and may be viewed by administrative users or even regular users.
+      Note that the environment variables changes are sent to stdout in
+      bourne/posix shell syntax so the eval statement can be used. For
+      example: eval `git secrepo -e ....`''')
 
    ienv_p = sp.add_parser('ienv',
       help='''Like import (below) but values are imported into
@@ -552,17 +551,26 @@ def secrepo_cmd(args):
 
       cmdargs=process_generic_args(args,parser)
 
-      glob=cmdargs.glob
+      glob=cmdargs.glob		# depricate
+      if cmdargs.glob:
+         if cmdargs.env:
+            raise SrException("Usage error: global and env cannot be used together.")
+         sr_scope = SR_GLOBAL
+      else:
+         if cmdargs.env:
+            sr_scope = SR_ENVIRON
+         else:
+            sr_scope = SR_LOCAL
+
       srcmd=cmdargs.srcmd
 
       debug_log(2,cmdargs)
-      if	srcmd=='add':		sr_add(cmdargs.key_name,glob,cmdargs.raw)
-      elif      srcmd=='decrypt':	sr_decrypt(cmdargs.filename)
-      elif      srcmd=='default':	sr_default(cmdargs.key_selector,glob)
+      if	srcmd=='add':		sr_add(cmdargs.key_name,sr_scope,cmdargs.raw)
+      elif	srcmd=='decrypt':	sr_decrypt(cmdargs.filename)
+      elif	srcmd=='default':	sr_default(cmdargs.key_selector,sr_scope)
       elif	srcmd=='del':		sr_del(cmdargs.key_selector,glob)
       elif	srcmd=='delall':	sr_delall(glob)
       elif	srcmd=='encrypt':	sr_encrypt()
-      elif	srcmd=='env':		sr_env()
       elif	srcmd=='export':	sr_export(glob)
       elif	srcmd=='ienv':		sr_ienv()
       elif	srcmd=='import':	sr_import(glob)
@@ -672,7 +680,7 @@ def global_status():
    else:
       warning("   No keys configured globally.")
 
-def sr_add(name,glob,raw):
+def sr_add(name,scope,raw):
    '''Allow input of a new key.
 
    Note that sr_new and sr_add are very similar except that
@@ -680,27 +688,30 @@ def sr_add(name,glob,raw):
    name, where as, sr_add prompts for the key and warns about
    duplicate name.'''
 
-   # can operate on global or local config
-   if glob:
+   # can operate on global, environment or local config
+   if scope == SR_GLOBAL:
       gr=gconf()
+   elif scope == SR_ENVIRON:
+      gr=srenv()
    else:
       gr=git()
 
    xkeys = gr.get_keys_named(name)
-   if xkeys:
-      warning("There are already %d key(s) in this repo named %s" % (len(xkeys),name))
+   if xkeys and not flags_quiet:
+      warning("There are already %d key(s) in %s named %s" % (len(xkeys),gr.cfg_name,name))
       warning("It is recommended that you choose a different name.")
 
-   warning("Enter new key.")
-   warning("Note that secrepo does not salt your pass-phrase when encrypting")
-   warning("so if your key is something you can memorize, it may not have")
-   warning("sufficient entropy to be secure.")
-   if raw:
-      warning("Raw keys may not contain spaces, tabs, commas or quotes")
-   else:
-      warning("A 256 bit base64 password will be stored as-is, other passwords will")
-      warning("be normalized using a determanistic key derivation function so your")
-      warning("plain-text password will not be visible in the config files.")
+   if not flags_quiet:
+      warning("Enter new key.")
+      warning("Note that secrepo does not salt your pass-phrase when encrypting")
+      warning("so if your key is something you can memorize, it may not have")
+      warning("sufficient entropy to be secure.")
+      if raw:
+         warning("Raw keys may not contain spaces, tabs, commas or quotes")
+      else:
+         warning("A 256 bit base64 password will be stored as-is, other passwords will")
+         warning("be normalized using a determanistic key derivation function so your")
+         warning("plain-text password will not be visible in the config or environment.")
 
    user_key=user_stdin.readline().strip()
    if not user_key:
@@ -717,8 +728,8 @@ def sr_add(name,glob,raw):
       # If the user has entered a short key, I can use a key derivation
       # function to get a 256 bit key.
       newkey = normalize_key(user_key)
-      if newkey != user_key:
-         warning("Note that the password you enterred was normalized. You can")
+      if newkey != user_key and not flags_quiet:
+         warning("Note that the password you entered was normalized. You can")
          warning("use the same password in the future to re-generatate this same")
          warning("key.")
 
@@ -732,10 +743,12 @@ def sr_add(name,glob,raw):
 
    ec = gr.get_encryption_key()		# encryption key prior to this.
    gr.set_key(newkey,name)
-   warning("New key (%s) value:\n    '%s'" % (name,newkey))
-   gr.new_default_note(ec)		# tell user if encryption key changed.
 
-   warning("You should backup this key/password to avoid data loss.")
+   if not flags_quiet:
+      warning("New key (%s) value:\n    '%s'" % (name,newkey))
+      gr.new_default_note(ec)		# tell user if encryption key changed.
+      warning("You should backup this key/password to avoid data loss.")
+
    gr.flush_config()
 
 def normalize_key(ukey):
@@ -942,72 +955,6 @@ def sr_delall(glob):
       return
    gr.delete_keys(keys)
    gr.flush_config()
-
-def sr_env():
-   '''Add a key to environment using stdout eval command for shell.
-   Returns True if a key was added.'''
-   
-   warning('''Note that environment variables may be exposed to other
-	users on this machine. Enter key with optional name following.
-	Separated by spaces or comma. Quotes will be removed.''')
-
-   v = split_fields(user_stdin.readline())
-   if not v:
-      warning("no input seen.")
-      return False
-   try:
-      gr=git()
-  
-      keys = gr.get_keys()
-      if v[0] in keys:
-         warning("Warning key was already available on local repo.")
-         ename = keys[key]
-         if ename:
-            warning("   Existing local key is named: "+ename)
-      
-   except GitFail:
-      # the sredit and environment
-      # commands can be used outside of a git repo
-      pass
-
-   if len(v) > 1:
-      slot = set_env_key(v[0],v[1])
-   else:
-      slot = set_env_key(v[0])
-      
-   warning("new key and name exported to SRK_%d and SRN_%d" % (slot,slot))
-
-env_slots=set()
-def set_env_key(key,name=None):
-   '''Set a key and optional name in environment using posix shell
-   eval stdout. No checks or assumptions on local git or global
-   config. Existing environment is handled.
-   Returns environment slot number updated.'''
-   
-   for x in xrange(1,50):
-      ev = "SRK_%d" % x
-      if ev in os_environ:
-         if os_environ[ev] == key:
-            # That key is already in environment. Just update
-            # name if it is provided.
-            if name:
-               print("export SRN_%d='%s';" % (x,name))
-            else:
-               print("unset SRN_%d;" % x)
-            return x
-      
-   for x in xrange(1,50):
-      if not x in env_slots and not "SRK_%d" % x in os_environ:
-         print("export SRK_%d='%s';" % (x,key))
-         if name:
-            print("export SRN_%d='%s';" % (x,name))
-         else:
-            print("unset SRN_%d;" % x)
-            
-         env_slots.add(x)	# mark slot as used.
-         return x
-      
-   raise SrException("No environment space.")
 
 def keys_matching(kdict,s):
    '''Return a key dict subset for keys with name or finger-print.'''
@@ -1222,11 +1169,13 @@ def sr_new(name,glob):
    gr.flush_config()
    return True
 
-def sr_default(keyname,glob):
+def sr_default(keyname,scope):
    'Set the default key for encryption, given key name or finger-print'
-   # can operate on global or local config
-   if glob:
+   # can operate on global, environment or local config
+   if scope == SR_GLOBAL:
       gr=gconf()
+   elif scope == SR_ENVIRON:
+      gr=srenv()
    else:
       gr=git()
 
@@ -1857,6 +1806,7 @@ class SrEnv(SrConfig):
       SrConfig.__init__(self)		#super
       configs = self._read_config()
       self.cfg_name='environment'
+      self.env_slots=set()
 
    def _read_config(self):
       '''Read keys and settigns from environment into self.'''
@@ -1942,8 +1892,45 @@ class SrEnv(SrConfig):
          self._c_default_key = key	# avoid assumption in superclass
 
       SrConfig.set_key(self,key,name)	# super
-      set_env_key(key,name)
+      self.set_env_key(key,name)
       if revert: self._c_default_key=None
+
+   def new_default_note(self,ec):
+      '''Provide info about added key.'''
+      warning("key added to environment (eval commands).")
+      # Note that we do not automatically set an encryption key
+      # in the environment.
+      
+   def set_env_key(self,key,name=None):
+      '''Set a key and optional name in environment using posix shell
+      eval stdout. No checks or assumptions on local git or global
+      config. Existing environment is handled.
+      Returns environment slot number updated.'''
+   
+      for x in xrange(1,50):
+         ev = "SRK_%d" % x
+         if ev in os_environ:
+            if os_environ[ev] == key:
+               # That key is already in environment. Just update
+               # name if it is provided.
+               if name:
+                  print("export SRN_%d='%s';" % (x,name))
+               else:
+                  print("unset SRN_%d;" % x)
+               return x
+      
+      for x in xrange(1,50):
+         if not x in self.env_slots and not "SRK_%d" % x in os_environ:
+            print("export SRK_%d='%s';" % (x,key))
+            if name:
+               print("export SRN_%d='%s';" % (x,name))
+            else:
+               print("unset SRN_%d;" % x)
+            
+            self.env_slots.add(x)	# mark slot as used.
+            return x
+      
+      raise SrException("No environment space.")
 
 # Gitrepo singleton
 _git_instance=None
@@ -2330,7 +2317,7 @@ class StreamCipher:
          # No more compressed data.
          stat.record_success()
          if debug_level: debug_log(1,"decompress success in: %d out: %d" %
-	      (stat.inbytes,stat.outbytes))
+                  (stat.inbytes,stat.outbytes))
 
       except zlib.error as e:
          # Decompression failed, probably because input stream
@@ -2403,7 +2390,7 @@ class StreamCipher:
 
     # Create a thread that reads the decrypted data and decompresses it.
     gzthread=threading.Thread(target=self.decompress_thread,
-	args=(gunzip_read_pipe,outstream,dstatus))
+          args=(gunzip_read_pipe,outstream,dstatus))
     gzthread.setDaemon(True)
     gzthread.start()
 
@@ -2444,7 +2431,7 @@ class StreamCipher:
        # It is possible that gunzip failed because the decryption
        # failed. In any case, we are not going to get any useful output.
        raise DecryptFail('_v1 gunzip outbytes=%d' %
-		dstatus.outbytes,dstatus.exception)
+             dstatus.outbytes,dstatus.exception)
 
     if dstatus.outbytes == 0:
        if debug_level: debug_log(1,"no output. Input: %d" % dstatus.inbytes)
