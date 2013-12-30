@@ -11,7 +11,7 @@ Like any high-strength crypto tool, you need to be aware that if you loose your 
 ## Why would I use SecRepo?
 Git is a great tool for tracking changes and synchronizing multiple work-spaces, however, to really take advantage of git you may want to have a _bare_ repo in the cloud, that you can access from any-where. Github is one example of this. You could also keep your bare repo on a small server on AWS or another cloud provider (this an approach I use). They problem is, you may have some sensitive files in your repo and cloud data is never completely under your control. Also, you might want to publish the contents of your repo, but keep a few files private due to an NDA or because they include name/contact details you do not have permission to publish. You may want a client or contractor to be able to access a repo but still keep some files private.
 
-SecRepo is designed to mitigate these problems by allowing your bare repo to contain encrypted data that is transparently decrypted in *your* workspace, provided you have the correct keys installed. SecRepo does not prevent someone without the keys from cloning the repo, however, the encrypted files will not be decrypted without the correct keys. Only the encrypted file(s) will in that workspace.
+SecRepo is designed to mitigate these problems by allowing your bare repo to contain encrypted files that are transparently decrypted in *your* workspace, provided you have the correct keys installed. SecRepo does not prevent someone without the keys from cloning the repo, however, the encrypted files will not be decrypted without the correct keys. Only the encrypted file(s) will exist in that workspace.
 
 ## Install
 See platform-specific notes:
@@ -26,7 +26,7 @@ To see the available options and sub-commands do:
    * `git secrepo {command} -h`
 
 ## Key Management and Security
-SecRepo will retrieve keys from:
+Each file encrypted by SecRepo has a header which identifies the file as being encrypted by SecRepo. In the header there is a key finger-print and key-name. The key-name is really just for information purposes. The key finger-print is used to find the correct key for decryption. SecRepo will retrieve keys from:
    * the local git repo, file {GIT_DIR}/srconfig
    * a global config name .srconfig in your home directory
    * environment variables
@@ -39,15 +39,22 @@ SecRepo will retrieve keys from:
 To add a first key to your repo use: `git secrepo new default`
 To list the keys use: `git secrepo keys`
 
+### Selection of Encrypt (default) Key
+Each file is encrypted by a single key. Because SecRepo allows several keys to be stored, a key must be designated as *default* in order to be used for encryption. The default encryption key is looked for (in order):
+   * environment variables
+      * this is not a common use, so a warning may be output when encrypting with an environment key.
+   * local git repo
+   * global config
+
 ### Key Security
 It is *not* intended that secrepo provides the same level of security as a password vault or encrypted volume where the decryption keys are memorized by the user never stored on disk.
 SecRepo encryption is really only as secure as the machine where you use the keys and keep the decrypted working tree.
 Your SecRepo keys *are* stored on disk. This is necessary so that git is usable without frequent password prompts.
 
-The srconfig files where your keys are stored are protected, however, an administrative user on your machine *will* be able to access your keys, also, your keys may be retrievable from a regular filesystem backup. If someone steals your keys, and they have access to the encrypted (bare) repo, they may be able to access the contents of your repo for an extended period, without your knowledge (including new commits) until your change your keys.
+The srconfig file where your keys are stored is protected, however, an administrative user on your machine *will* be able to access your keys, also, your keys may be retrievable from a regular filesystem backup. If someone steals your keys, and they have access to the encrypted (bare) repo, they may be able to access the contents of your repo for an extended period, without your knowledge (including new commits) until you change your keys.
 
-#### Stonger Security Ideas
-If you are putting really sensitive information into a Git repo, you probably want to keep your working tree (checked out Git files) and SecRepo keys on an encrypted volume such as Truecrypt or LUKS or NTFS encryption. You also would want to control access to your bare repo (in the cloud) as must as possible (only allow ssh access and create separate keys for each legitimate user).  You probably want to change the SecRepo encryption key after revoking access for a user.
+#### Stronger Security Ideas
+If you are putting really sensitive information into a Git repo, you probably want to keep your working tree (checked out Git files) and SecRepo keys on an encrypted volume such as Truecrypt, LUKS or NTFS encryption. Also, you would want to control access to your bare repo (in the cloud) as much as possible (only allow ssh access and require separate ssh keys for each legitimate user).  You probably want to change the SecRepo encryption key after revoking access for a user.
 
 ## Configuring Filters
 Secrepo works by configuring filters in your git configuration. You also need to activate these filters in you git working tree in `.gitattributes`. A sub-command `git secrepo config` handles git configurations.
@@ -102,12 +109,31 @@ Makefile diff=private
 README diff=private
 ```
 
+## Environment Variables
+* `SRK_##`
+    Environment variables starting with SRK_ hold keys values.
+* `SRN_##`
+   Environment variables starting with SRN_ hold key names (optional)
+* `SECREPO_DEFAULT`
+   Used to identify the default encryption key, as in:
+  * SRK_{SECREPO_DEFAULT}
+  * SRN_{SECREPO_DEFAULT}  (optional)
+* `SECREPO_QUIET`
+   if set then equivalent to --quiet or -q
+* `SECREPO_VERBOSE`
+   if set then equivalent to --verbose or -v
+* `SECREPO_DEBUG`
+   integer value 1-4 indicating level of debug output.
+* `GIT_COMMIT`
+
 ## Encrypted Files in Working Tree
 Depending on the order you do things, you may end up with some encrypted files in your local working tree, when you really wanted them un-encrypted.
    * the necessary keys were not available when you checked-out.
    * the necessary filters were not configured when you checked-out.
 
-## git secrepo decrypt
+## In-place Decryption
+   * `git secrepo decrypt`
+
 This decrypt sub-command allows you to decrypt files in your working-tree in-place. It will not disturb files that are already decrypted. If you have been using `sredit` then this is the method you need to use in order to preserve your changes (not a common scenario).
 The secrepro decrypt command reads a list of file names from standard input and inspects each file to see if it can be decrypted. At the end of the process, it prints a summary of what was done. It is intended to be used in a pipe-line with `git ls-files` as follows:
 ```sh
