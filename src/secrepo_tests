@@ -20,11 +20,12 @@ class UtilityTest(unittest.TestCase):
       self.stdout_piped = False
       self.read_stdout_thread=None
       self.write_stdin_thread=None
+      self.environ=os.environ	# subclass may override this
 
    def tearDown(self):
       self.clean_junk()
       if self.editor_saved:
-         os.environ['EDITOR']=self.editor_saved
+         self.environ['EDITOR']=self.editor_saved
          self.editor_saved=None
 
       self.my_editor=None
@@ -114,18 +115,20 @@ touch "$f"
 ''')
       # rename to something less obscure?
 
-      if 'EDITOR' in os.environ:
-         self.editor_saved=os.environ['EDITOR']
+      if 'EDITOR' in self.environ:
+         self.editor_saved=self.environ['EDITOR']
 
       if is_windoz:
-         if 'EDITOR' in os.environ:
-            del os.environ['EDITOR']
-         sr.default_editor=['sh',name]
+         self.apply_windoz_editor(name)
       else:
-         os.environ['EDITOR']=name
+         self.environ['EDITOR']=name
          os.chmod(name,0700)
 
       self.my_editor=name
+
+   def apply_windoz_editor(self,name):
+      '''Subclass can apply editor for windoz'''
+      pass
 
    def fake_editor_append(self,txt):
       '''provide some text to be appended by the fake editor'''
@@ -336,9 +339,19 @@ class TestSecrepo1(UtilityTest):
    def setUp(self):
       UtilityTest.setUp(self)		#super
       self.sr_version=1
+      # start each TC with fresh environment
+      sr.os_environ=dict()
+      sr.os_environ.update(reset_env)
+      self.environ = sr.os_environ	# for superclass
 
    def cipher(self):
       return sr.cipher(self.sr_version)
+
+   def apply_windoz_editor(self,name):
+      '''Called by superclass to install a fake editor.'''
+      if 'EDITOR' in self.environ:
+         del self.environ['EDITOR']
+      sr.default_editor=['sh',name]
 
    def sr_cleanup(self):
       '''Cleanup sr module in preparation for next command or TC.
@@ -351,11 +364,23 @@ class TestSecrepo1(UtilityTest):
       # Drop the Gitrepo singleton
       sr._git_instance=None
 
-      # Drop the global congif
+      # Drop the global config
       sr._gconf_instance=None
+
+      # Drop the environment config
+      sr._srenv_instance=None
 
       # Reset anything else in module?
       # Hopefully nothing to do here. Perhaps call sr.module_init()
+      sr.env_slots=set()
+      sr.kf_cache=dict()
+
+      # Environment cleanup
+      for x in xrange(1,50):
+        v = "SRK_%d" % x
+        if v in sr.os_environ:
+           del sr.os_environ[v]
+
  
    def check_clean(self):
       '''Check for inconsistancies and prepare for next command.'''
@@ -906,20 +931,21 @@ class TestSecrepo1(UtilityTest):
       self.assertEquals(len(gr.get_keys_matching('Ix9s87O5dME')),1)	# ltesta3key
       self.assertEquals(len(gr.get_keys_matching('ltesx')),0)
       # test lookup by finger-print (env keys)
-      self.assertEquals(len(sr.env_keys_matching('QhAkMfGjgQ7')),1)	# ltestb3key
-      self.assertEquals(len(sr.env_keys_matching('ltesx')),0)
+      ematch=sr.srenv().get_keys_matching
+      self.assertEquals(len(ematch('QhAkMfGjgQ7')),1)	# ltestb3key
+      self.assertEquals(len(ematch('ltesx')),0)
 
       # test lookup by name (local keys)
       self.assertEquals(len(gr.get_keys_matching('repo1name')),3)
       self.assertEquals(len(gr.get_keys_matching('repo2name')),1)
       self.assertEquals(len(gr.get_keys_matching('repo3name')),2)
       # test lookup by name (env keys)
-      self.assertEquals(len(sr.env_keys_matching('env4name')),2)
-      self.assertEquals(len(sr.env_keys_matching('env2name')),1)
-      self.assertEquals(len(sr.env_keys_matching('envxname')),0)
+      self.assertEquals(len(ematch('env4name')),2)
+      self.assertEquals(len(ematch('env2name')),1)
+      self.assertEquals(len(ematch('envxname')),0)
 
       # Try some key finding based on finger-print.
-      dk=gr.find_decryption_key
+      dk=sr.find_decryption_key
       self.assertEquals(dk('pSAz7q3N2g1','tbd'),'ltestb2key')
       self.assertEquals(dk('srJ0Oo6HhbA','tbd'),'anotherkey4')
 
@@ -966,14 +992,16 @@ class TestSecrepo1(UtilityTest):
       sr.secrepo_cmd(['env'])
       self.stdio_capdone()
       self.stdout_results.index("export SRK_2='newenvkey1';")
-      self.stdout_results.index("export SRK_2='newenvkey2';")
-      self.stdout_results.index("export SRN_2='newname2';")
+      self.stdout_results.index("export SRK_3='newenvkey2';")
+      self.stdout_results.index("export SRN_3='newname2';")
       self.stdout_results.index("unset SRN_2;")
       check_stderr()
 
       self.stdio_capture('')
+      ev['SRN_2']='bob'
       sr.secrepo_cmd(['wipe'])
       self.stdio_capdone()
+      self.stdout_results.index("unset 'SRK_1';")
       self.stdout_results.index("unset 'SRN_2';")
       self.check_leaks()
  
@@ -1045,16 +1073,16 @@ class TestSecrepo1(UtilityTest):
       for x in xrange(1,10):
         key='testkey'+str(x)
         finger=sr.create_keyfinger(key)
-        self.assertEquals(key,gr.find_decryption_key(finger,'testname'))
+        self.assertEquals(key,sr.find_decryption_key(finger,'testname'))
 
       gr.delete_key("testkey5")
       finger=sr.create_keyfinger("testkey5")
-      self.assertRaises(sr.NoKeyAvailable,gr.find_decryption_key,finger,'testname')
+      self.assertRaises(sr.NoKeyAvailable,sr.find_decryption_key,finger,'testname')
       gr.flush_config()		# because I am using gr.set_key gr.delete_key
 
       self.check_clean()
       gr=sr.git()
-      self.assertRaises(sr.NoKeyAvailable,gr.find_decryption_key,finger,'testname')
+      self.assertRaises(sr.NoKeyAvailable,sr.find_decryption_key,finger,'testname')
 
       gr.set_key("testkey7","newname7")
       self.assertEquals(gr.get_keyname("testkey7"),"newname7")
@@ -1230,5 +1258,30 @@ if __name__ == '__main__':
    # Should we do this also in .tearDown  ?
    #
    wipe_testconfig()
+
+   # For test performance, we might want to fake-out environment.
+   # To be safe, we would have to ensure os.environ is not referenced
+   # in a few places. This would allow a tearDown to reset the environment
+   # back to initial more quickly. Of course, this 'fake' environment would
+   # not be visible to a subprocess.
+
+   # remove all SR variables from environment (except perhaps SECREPO_DEBUG)
+   for v in ['SECREPO_VERBOSE','SECREPO_QUIET','SECREPO_DEFAULT']:
+     if v in os.environ: del os.environ[v]
+
+   orig_environ=sr.os_environ
+   reset_env = dict()
+   reset_env.update(sr.os_environ)
+   dkeys=set()
+   for v in orig_environ:
+     if v[:4] == 'SRK_' or v[:4] == 'SRN_':
+        del reset_env[v]
+        dkeys.add(v)
+
+   for v in dkeys:
+      del orig_environ[v]
+
+   #sr.os_environ = dict()
+   #sr.os_environ.update(reset_env)
 
    unittest.main()

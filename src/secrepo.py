@@ -91,6 +91,11 @@ default_version=1
 # May be modified for unit-testing
 default_editor=['vim']
 
+# Scope for config changes or indication of where decryption key was found
+SR_LOCAL=1
+SR_GLOBAL=2
+SR_ENVIRON=3
+
 #
 # Exceptions
 #
@@ -939,7 +944,7 @@ def sr_delall(glob):
    gr.flush_config()
 
 def sr_env():
-   '''Add keys to environment using stdout eval command for shell.
+   '''Add a key to environment using stdout eval command for shell.
    Returns True if a key was added.'''
    
    warning('''Note that environment variables may be exposed to other
@@ -972,6 +977,7 @@ def sr_env():
       
    warning("new key and name exported to SRK_%d and SRN_%d" % (slot,slot))
 
+env_slots=set()
 def set_env_key(key,name=None):
    '''Set a key and optional name in environment using posix shell
    eval stdout. No checks or assumptions on local git or global
@@ -982,7 +988,8 @@ def set_env_key(key,name=None):
       ev = "SRK_%d" % x
       if ev in os_environ:
          if os_environ[ev] == key:
-            # that key is already in environment
+            # That key is already in environment. Just update
+            # name if it is provided.
             if name:
                print("export SRN_%d='%s';" % (x,name))
             else:
@@ -990,13 +997,14 @@ def set_env_key(key,name=None):
             return x
       
    for x in xrange(1,50):
-      if not "SRK_%d" % x in os_environ:
+      if not x in env_slots and not "SRK_%d" % x in os_environ:
          print("export SRK_%d='%s';" % (x,key))
          if name:
             print("export SRN_%d='%s';" % (x,name))
          else:
             print("unset SRN_%d;" % x)
             
+         env_slots.add(x)	# mark slot as used.
          return x
       
    raise SrException("No environment space.")
@@ -1060,7 +1068,9 @@ def sr_import(glob,to_environ=False):
    '''Import keys to local repo or environment.
    Note that this will override existing names.'''
    # can operate on global or local config
-   if not to_environ:
+   if to_environ:
+      gr=srenv()
+   else:
       if glob:
          gr=gconf()
       else:
@@ -1084,10 +1094,7 @@ def sr_import(glob,to_environ=False):
                name=None
             if valid_key(key):
                count = count + 1
-               if to_environ:
-                  set_env_key(key,name)
-               else:
-                  gr.set_key(key,name)
+               gr.set_key(key,name)
             else:
                warning("Invalid key '%s' ignored." % key)
                errors=errors+1
@@ -1095,19 +1102,16 @@ def sr_import(glob,to_environ=False):
             warning('Not processed: "%s"' % ln.strip())
             ignored = ignored + 1
 
-   if not to_environ:
-      gr.flush_config()
+   gr.flush_config()
 
    warning("Summary: %d keys accepted, %d errors, %d lines ignored." %
          (count,errors,ignored))
 
-   if glob:
-      warning("   Import to global config completed.")
-   else:
-      warning("   Import to local repo completed.")
+   warning("   Import to %s completed." % gr.cfg_name)
 
 def sr_ienv():
-   warning("Note that you must eval this command for environment settings to work.")
+   if not flags_quiet:
+      warning("Note that you must eval this command for environment settings to work.")
    sr_import(False,to_environ=True)
 
 def sr_listkeys(lmatch=None):
@@ -1126,17 +1130,19 @@ def sr_listkeys(lmatch=None):
       ldefault=None
 
    gl=gconf()
+   gdefault = gl.get_encryption_key()
+
    if lmatch:
       gkeys=gl.get_keys_matching(lmatch)
    else:
       gkeys=gl.get_keys()
 
-   gdefault = gl.get_encryption_key()
-
+   env = srenv()
+   edefault = env.get_encryption_key()
    if lmatch:
-      envkeys=env_keys_matching(lmatch)
+      envkeys=env.get_keys_matching(lmatch)
    else:
-      envkeys=env_keys()
+      envkeys=env.get_keys()
 
    bothkeys=dict()	# superset of config, global and environ keys
    bothkeys.update(envkeys)
@@ -1148,7 +1154,6 @@ def sr_listkeys(lmatch=None):
       return 0
 
    fp=create_keyfinger
-   edefault,edname = env_encryption_key()
 
    form=" %-22s %-14s %-18s"
    warning(form % ('Key Name','Finger Print','Scope'))
@@ -1279,42 +1284,6 @@ def valid_name(name):
 
    return True
  
-def env_keys():
-    '''Get temporary keys from environment. Some validation done.
-    Returns dict of keys with names. Default name 'env' is used
-    if there is no name in the environment.'''
-    d=dict()
-    for evar in os_environ:
-      if evar[:4] == 'SRK_' and len(evar) > 4:
-         if valid_env(evar):
-	    key=os_environ[evar]
-	    if valid_key(key):
-	       nvar='SRN_'+evar[4:]
-	       if nvar in os_environ:
-	          d[key] = os_environ[nvar]
-	       else:
-	          # Name is optional for environment keys.
-	          # We put in the default name 'env'.
-	          d[key]='env'
-	    else:
-	       warning("Invalid key in: "+evar)
-
-    #debug_log(2,"env_keys:",d)
-    return d
-
-def env_keys_matching(s):
-   '''Get keys from environment matching name or finger-print'''
-   return keys_matching(env_keys(),s)
-
-def env_decryption_key(finger):
-   '''Return a key in environment that matches a fingerprint.
-   Returns None if no key found.'''
-   keys = env_keys()
-   key = try_keys(keys, finger)
-   if key:
-      return key
-   return None
-
 def env_encryption_key():
    '''Return a key and name from environment that is indicated
    as default key for encryption, or, None,None.'''
@@ -1338,6 +1307,9 @@ def sr_wipe():
           if valid_env(k):
              count=count+1
              print("unset '%s';" % k)
+
+    if 'SECREPO_DEFAULT' in os_environ:
+       print("unset SECREPO_DEFAULT;")
 
     if count == 0:
        warning("no environment keys found.")
@@ -1374,24 +1346,17 @@ def srclean_cmd(args):
    parser=generic_args()
    cmdargs=process_generic_args(args,parser)
 
-   # Note that a default key in the environment will override
-   # the default key in the repo.
-   key,name = env_encryption_key()
-   if key:
-      if not flags_quiet:
+   try:
+      # Note that a default key in the environment will override
+      # the default key in the repo.
+      key,name,src = default_key()	# raises exception if not found
+      if src == SR_ENVIRON and not flags_quiet:
          # Because we are encrypting to an environment key, we warn
          # the user. This is not a common scenario.
          warning("secrepo: Using encryption key from environment.")
-      version = default_version
-      gr = None
-   else:
-      try:
-         gr = git()
-         key,name = gr.default_key()	# raises exception if not found
-         version=gr.default_version
-      except NoKeyAvailable as e:
-         e.report()
-         return 2		# exit 2 to indicate to git that clean failed.
+   except NoKeyAvailable as e:
+      e.report()
+      return 2		# exit 2 to indicate to git that clean failed.
 
    # Other exceptions from this function just fall out to user terminal.
 
@@ -1407,6 +1372,8 @@ def srclean_cmd(args):
       msvcrt.setmode(in_file, os.O_BINARY)
       msvcrt.setmode(out_file, os.O_BINARY)
 
+   # The git repo could override the version I suppose.
+   version=git().default_version
    header = Header(version=version,keyname=name,key=key)
 
    # We read the initial bytes of the file into a buffer which we
@@ -1448,12 +1415,13 @@ def srclean_cmd(args):
       key=None
       if gr:
        try:
-         key=gr.find_decryption_key(hcheck.keyfinger,hcheck.keyname)
+         key=find_decryption_key(hcheck.keyfinger,hcheck.keyname)
          if sr_reset_mode:
             sr_log_mode=True
 
-         # The following can produce excess output during filter-branch.
-         # For now, use SECREPO_QUIET=1 git filter-branch ....
+         # The following would produce excess output during filter-branch
+         # so we suppress output using flags_quiet which is set implicitly
+         # in the tree-filter (environ GIT_COMMIT).
          #
          if not sr_log_mode and not flags_quiet:
             warning("\nsecrepo: Encrypted file(s) in working tree. You may need to reset --hard")
@@ -1619,7 +1587,7 @@ def smudge_filter(in_file,out_file):
    # Using the key fingerprint from the header we will try
    # and get the key.
    #
-   key = gr.find_decryption_key(header.keyfinger,header.keyname)
+   key = find_decryption_key(header.keyfinger,header.keyname)
    # get key should raise an exception if it cannot locate the key.
    
    if sr_log_mode:
@@ -1649,12 +1617,8 @@ class SrConfig:
       #
       self.default_version=default_version
 
-      # To speed the secrepo decrypt command which handles multiple files
-      # we create a faster map from key finger-print to key.
-      self.kf_cache=dict()
-
    def _read_config(self):
-
+      '''Read keys and settings from config files into self.'''
       (configs,self._keys) = read_config(self.srconfig)
 
       #
@@ -1701,21 +1665,6 @@ class SrConfig:
       self._c_default_key = key
       return
 
-   def default_key(self):
-      '''Return the default key and name for encryption.
-      Never returns key '' or None.
-      Exception is raised if default key is not available.
-      Looks in local repo, environment and global keystore.'''
-
-      if self._c_default_key:
-         return (self._c_default_key,self._keys[self._c_default_key])
-
-      key = gconf().get_encryption_key()		# could be self?
-      if key: return key, gconf().get_keyname(key)	# not self
-
-      # TODO: check environment
-      raise NoDefaultEncryptionKey("default")
-      
    def get_keys_matching(self,s):
       'Return a list of local keys matching string (name or finger-print).'
       return keys_matching(self._keys,s)
@@ -1749,9 +1698,8 @@ class SrConfig:
 
    def get_keyname(self,key):
       '''Lookup key in local.
-      This is preferred to accessing .keys directly outside this class.
-      Note that local keyname should never be empty or None.
-      ? currently used only from unit-test. Is this method necessary?'''
+      This is preferred to accessing ._keys directly outside this class.
+      Note that local keyname should never be empty or None.'''
       if key in self._keys:
          return self._keys[key]
       return None
@@ -1798,13 +1746,13 @@ class SrConfig:
          del self._keys[key]
 
       # To be consistent, I could remove key from kf_cache
-      # self.kf_cache=dict()
+      # kf_cache=dict()
       df=None
-      for f,k in self.kf_cache.items():
+      for f,k in kf_cache.items():
          if k == key:
             df=f
 
-      if df: del self.kf_cache[df]
+      if df: del kf_cache[df]
 
    def set_key(self,key,name):
       '''Add or change an existing key in local repo.
@@ -1827,6 +1775,8 @@ class SrConfig:
          # the default key. This is a bit of an assumption because
          # the set_key interface is also used for imports.
          # No output here. Output in the sr_new if needed.
+         # This will fail if we are SrEnv, so SrEnv may set ._c_default_key
+         # earlier.
          self.set_default_key(key)
 
 # Global config scope singleton
@@ -1842,6 +1792,7 @@ class SrGlobal(SrConfig):
    '''Singleton to handle global configuration files.'''
    def __init__(self):
       SrConfig.__init__(self)		#super
+      self.cfg_name='global config'
 
       # Read global config
       self.srconfig=os.path.join(os.environ['HOME'],'.'+srconfig_file)
@@ -1891,6 +1842,109 @@ def gitdir():
 
    return git_dir
 
+# SrEnv singleton
+_srenv_instance=None
+def srenv():
+   'SrEnv singleton'
+   global _srenv_instance
+   if _srenv_instance: return _srenv_instance
+   _srenv_instance=SrEnv()
+   return _srenv_instance
+
+class SrEnv(SrConfig):
+   '''Class to represent keys configured in environment.'''
+   def __init__(self):
+      SrConfig.__init__(self)		#super
+      configs = self._read_config()
+      self.cfg_name='environment'
+
+   def _read_config(self):
+      '''Read keys and settigns from environment into self.'''
+
+      # TODO: import the logic into this method and depricate other methods
+      self._c_default_key,name = env_encryption_key()
+      self._keys=self._env_keys()
+
+      self._config_changed=False
+      return None
+
+   def _env_keys(self):
+      '''Get temporary keys from environment. Some validation done.
+      Returns dict of keys with names. Default name 'env' is used
+      if there is no name in the environment.'''
+      d=dict()
+      for evar in os_environ:
+         if evar[:4] == 'SRK_' and len(evar) > 4:
+            if valid_env(evar):
+               key=os_environ[evar]
+               if valid_key(key):
+                  nvar='SRN_'+evar[4:]
+                  if nvar in os_environ:
+                     d[key] = os_environ[nvar]
+                  else:
+                     # Name is optional for environment keys.
+                     # We put in the default name 'env'.
+                     d[key]='env'
+               else:
+                  warning("Invalid key in: "+evar)
+
+      if debug_level: debug_log(1,"env_keys:",d)
+      # warning("env_keys:",d)
+      return d
+
+   def set_default_key(self,key):
+      '''Set default key in environment. It is assumed that some validation
+      has already been done on key.'''
+      for v in os_environ:
+        if v[:4] == 'SRK_':
+           if os_environ[v] == key:
+              self._c_default_key=key	# for consistancy with other classes
+              print("export SECREPO_DEFAULT='%s';" % v[4:])
+              # No point is actually updating the environ
+              return
+
+      # It is an error to assign a default key that is not already known.
+      raise SrException('Env key (%s) not found.' % key)
+
+   def flush_config(self):
+      '''Write changes to config file doesn't apply to environ.'''
+      debug_log(1,'SrEnv.flush_config()')
+      self._config_changed=False
+
+   def write_config(self):
+      '''Doesn't apply to environment. Probably an error.'''
+      raise SrException('SrEnv.write_config()')
+
+   def delete_key(self,key):
+      '''Delete a key from environment (output eval commands).'''
+      defaultkey=os_environ.get('SECREPO_DEFAULT')
+
+      SrConfig.delete_key(self,key)	# super
+      for v in os_environ:
+         if v[:4] == 'SRK_':
+            if os_environ[v] == key:
+               print("unset '%s';" % v)
+               print("unset '%s';" % 'SRN_'+v[4:])
+               if defaultkey:
+                  if defaultkey == v[4:]:
+                     print("unset SECREPO_DEFAULT;")
+
+               # Probably no point in actually modifying environment
+               # for this process.
+               return
+
+   def set_key(self,key,name):
+      '''Set a key in the environment (output eval commands).'''
+      if self._c_default_key:
+         revert=False
+      else:
+         revert=True
+         self._c_default_key = key	# avoid assumption in superclass
+
+      SrConfig.set_key(self,key,name)	# super
+      set_env_key(key,name)
+      if revert: self._c_default_key=None
+
 # Gitrepo singleton
 _git_instance=None
 def git():
@@ -1909,6 +1963,7 @@ class Gitrepo(SrConfig):
    or global.'''
    def __init__(self):
       SrConfig.__init__(self)		#super
+      self.cfg_name='local repo config'
 
       self.git_dir = gitdir()
 
@@ -1969,52 +2024,6 @@ class Gitrepo(SrConfig):
       except CalledProcessError:
          return False	# no change
 
-   def find_decryption_key(self,finger,name):
-      '''Get decryption key from local, environment or global.
-      Exception is raised if key is not found.
-      Key name will be included in exception but is not used otherwise.'''
-      if not finger:
-         raise SrException("find_decryption_key no fingerprint provided.")
-
-      if not name:
-         # Can't think of a valid reason for this because all headers
-         # are now required to have a name field.
-         raise SrException("find_decryption_key no name provided.")
-
-      # Have we found this already
-      if finger in self.kf_cache:
-         return self.kf_cache[finger]
-
-      # For speed, try local keys first.
-      key = self.get_decryption_key(finger)
-      if key:
-         # Found a usable key in local keystore.
-         self.kf_cache[finger]=key
-         return key
-
-      key = env_decryption_key(finger)
-      if key:
-         # Found a usable key in environment.
-         self.kf_cache[finger]=key
-         return key
-
-      # Try global scope
-      gc = gconf()
-      key = try_keys(gc.get_keys(), finger)
-      if key:
-         # Found a usable key in global store.
-         self.kf_cache[finger]=key
-         return key
-
-      # TODO:	Look into other location(s) for the key.
-      #		- ~/.srconfig
-      #		- kernel keyring
-      #		- gnome keyring
-      #         - gpg keyring
-      #
-
-      raise NoKeyAvailable(name,None,finger)
-
    def new_default_note(self,ec):
       '''Warn using if the key they just added is now the default key
       for encryption.'''
@@ -2025,6 +2034,75 @@ class Gitrepo(SrConfig):
          warning("This is now the default key for encryption")
          warning("for local scope (overrides global and environment).")
 
+# To speed the secrepo decrypt command which handles multiple files
+# we create a faster map from key finger-print to key.
+kf_cache=dict()
+
+def find_decryption_key(finger,name):
+   '''Get decryption key from local, environment or global.
+   Exception is raised if key is not found.
+   Key name will be included in exception but is not used otherwise.'''
+   if not finger:
+      raise SrException("find_decryption_key no fingerprint provided.")
+
+   if not name:
+      # Can't think of a valid reason for this because all headers
+      # are now required to have a name field.
+      raise SrException("find_decryption_key no name provided.")
+
+   # Have we found this already
+   if finger in kf_cache:
+      return kf_cache[finger]
+
+   # For performance reasons, try environment first.
+   key = srenv().get_decryption_key(finger)
+   if key:
+      # Found a usable key in environment.
+      kf_cache[finger]=key
+      return key
+
+   # For speed, try local keys first.
+   # I could use a try: block to allow operation outside of a repo
+   key = git().get_decryption_key(finger)
+   if key:
+      # Found a usable key in local keystore.
+      kf_cache[finger]=key
+      return key
+
+   # Try global scope
+   gc = gconf()
+   key = try_keys(gc.get_keys(), finger)
+   if key:
+      # Found a usable key in global store.
+      kf_cache[finger]=key
+      return key
+
+   # TODO:	Look into other location(s) for the key.
+   #		- ~/.srconfig
+   #		- kernel keyring
+   #		- gnome keyring
+   #		- gpg keyring
+
+   raise NoKeyAvailable(name,None,finger)
+
+def default_key():
+   '''Return the default key and name and key source for encryption.
+   Never returns key '' or None.
+   Exception is raised if default key is not available.
+   Looks in environment, local repo and global keystore.'''
+
+   key = srenv().get_encryption_key()
+   # May need warning if encrypting to environment key
+   if key: return key, srenv().get_keyname(key), SR_ENVIRON
+
+   key = git().get_encryption_key()
+   if key: return key, git().get_keyname(key), SR_LOCAL
+
+   key = gconf().get_encryption_key()
+   if key: return key, gconf().get_keyname(key), SR_GLOBAL
+
+   raise NoDefaultEncryptionKey("default")
+      
 # From python 2.7 subprocess.py
 # Remove this later and just use the subprocess implementation.
 def check_output(*popenargs, **kwargs):
@@ -2095,8 +2173,8 @@ def file_md5sum(fn):
 
 def edit_existing_file(editfile):
     '''Edit a non-encrypted file. Return True if changes were made.'''
-    if "EDITOR" in os.environ:
-       editor_cmd = [os.environ["EDITOR"]]
+    if "EDITOR" in os_environ:
+       editor_cmd = [os_environ["EDITOR"]]
     else:
        editor_cmd = default_editor
 
@@ -2760,7 +2838,7 @@ def decrypt_file(filename):
    infile = open(filename,'rb')
    try:
       header = Header(infile)
-      key = git().find_decryption_key(header.keyfinger, header.keyname)
+      key = find_decryption_key(header.keyfinger, header.keyname)
    except InvalidHeader:
       return 2		# Not encrypted
    finally:
@@ -2857,7 +2935,7 @@ def get_edit_key(finger,name):
       # the file after editing.
       raise SrException("edit missing key name")
 
-   key = env_decryption_key(finger)
+   key = srenv().get_decryption_key(finger)
    if key: return key
 
    key = gconf().get_decryption_key(finger)
