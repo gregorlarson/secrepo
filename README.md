@@ -9,7 +9,7 @@ This script is still fairly new, which means there is some new-adoption risk. An
 Like any high-strength crypto tool, you need to be aware that if you loose your key, your data *cannot* be recovered. The developer does not have any special back-door or administrative access.
 
 ## Why would I use SecRepo?
-Git is a great tool for tracking changes and synchronizing multiple work-spaces, however, to really take advantage of git you may want to have a _bare_ repo in the cloud, that you can access from any-where. Github is one example of this. You could also keep your bare repo on a small server on AWS or another cloud provider (this an approach I use). They problem is, you may have some sensitive files in your repo and cloud data is never completely under your control. Also, you might want to publish the contents of your repo, but keep a few files private due to an NDA or because they include name/contact details you do not have permission to publish. You may want a client or contractor to be able to access a repo but still keep some files private.
+Git is a great tool for tracking changes and synchronizing multiple work-spaces, however, to really take advantage of git you may want to have a _bare_ repo in the cloud, that you can access from any-where. Github is one example of this. You could also keep your bare repo on a small server on AWS or another cloud provider (this an approach I use). The problem is, you may have some sensitive files in your repo, and cloud data is never completely under your control. Also, you might want to publish the contents of your repo, but keep a few files private due to an NDA or because they include name/contact details you do not have permission to publish. You may want a client or contractor to be able to access a repo but still keep some files private.
 
 SecRepo is designed to mitigate these problems by allowing your bare repo to contain encrypted files that are transparently decrypted in *your* workspace, provided you have the correct keys installed. SecRepo does not prevent someone without the keys from cloning the repo, however, the encrypted files will not be decrypted without the correct keys. Only the encrypted file(s) will exist in that workspace.
 
@@ -18,6 +18,7 @@ See platform-specific notes:
    * Linux.md
    * Cygwin.md
    * Windows.md
+   * Bsd.md
 
 ## git secrepo
 The main interface to secrepo is via the `git-secrepo` command in your bin which is also accessed as `git secrepo`.
@@ -110,6 +111,7 @@ README diff=private
 ```
 
 ## Environment Variables
+Using the flag --env or -e, you can import, export, add or modify environment variables. It is important to note that environment variables are modified with bourne/posix commands sent to stdout, so you need to eval the output in order for the commands to take effect. If you are not the administrator and only user on a machine, you need to consider how secure environment variables are for your system. On some operating systems, it is possible for other users logged into your machine to see your environment variables, and, potentially steal your keys.
 * `SRK_##`
     Environment variables starting with SRK_ hold keys values.
 * `SRN_##`
@@ -125,6 +127,14 @@ README diff=private
 * `SECREPO_DEBUG`
    integer value 1-4 indicating level of debug output.
 * `GIT_COMMIT`
+
+Note that when encrypting to a default key in your environment, a warning may be printed because this is not a common case. Unlike global or repo configuration, a default key for encryption is not assigned automatically when adding the first key to the environment. To put a default key for encryption in the environment you need to do:
+```sh
+eval `git secrepo -e default somekeyname`
+# or
+eval `git secrepo -e default keyfingerprint`
+```
+The key you are making default must already be setup in the environment.
 
 ## Encrypted Files in Working Tree
 Depending on the order you do things, you may end up with some encrypted files in your local working tree, when you really wanted them un-encrypted.

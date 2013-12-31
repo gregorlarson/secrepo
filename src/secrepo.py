@@ -38,6 +38,7 @@ from Crypto.Protocol.KDF import PBKDF2
 #
 # Global values and Utility Flags
 #
+is_bsd=False
 if sys.platform[:3] == 'win':
    import msvcrt
    import nt
@@ -56,6 +57,8 @@ else:
    os_read=os.O_RDONLY
    os_create=os.O_WRONLY|os.O_CREAT
    os_overwrite=os.O_WRONLY			# overwrite a file in-place
+   if sys.platform.find('bsd') >= 0:
+      is_bsd = True
 
 # More output
 flags_verbose=False

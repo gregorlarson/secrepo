@@ -1194,6 +1194,9 @@ def count_open_files():
    code did not leak fd. Probably not portable (linux only)'''
    if is_windoz: return 0
 
+   if is_bsd:
+      return len(os.listdir("/dev/fd"))
+
    return len(os.listdir("/proc/%d/fd" % os.getpid()))
 
 def list_open_files():
@@ -1213,19 +1216,23 @@ if sys.platform[:5] == 'linux':
    is_linux=True
    is_cygwin=False
    is_windoz=False
+   is_bsd=False
 else:
    is_linux=False
    if sys.platform == 'cygwin':
       is_cygwin=True
       is_windoz=False
+      is_bsd=False
    else:
       is_cygwin=False
       if sys.platform[:3] == 'win':
          is_windoz=True
+         is_bsd=False
          import nt
       else:
          is_windoz=False
-         # todo add bsd
+         if sys.platform.find('bsd') >= 0:
+            is_bsd=True
 
 def wipe_testconfig():
    'Delete test config files to start with a fresh configuration.'
@@ -1235,7 +1242,8 @@ def wipe_testconfig():
  
 if __name__ == '__main__':
 
-   print("Flags: Linux=",is_linux,"Cygwin=",is_cygwin,"Windows=",is_windoz)
+   print("Flags: Linux=",is_linux,"Cygwin=",is_cygwin,"Windows=",is_windoz,
+      'Bsd=',is_bsd)
 
    # Unit tests should be run from a git working tree.
    gd = sr.gitdir()
