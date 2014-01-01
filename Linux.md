@@ -17,6 +17,7 @@ cd secrepo
 ```sh
 cd src
 chmod 755 sr* git-secrepo secrepo_tests
+rm *.pyc
 cp * /usr/local/bin/
 cd ../test/
 secrepo_tests
@@ -26,6 +27,7 @@ secrepo_tests
 ```sh
 cd src
 chmod 755 sr* git-secrepo secrepo_tests
+rm *.pyc
 cp * ~/bin/
 cd ../test/
 secrepo_tests
@@ -36,6 +38,7 @@ Useful if you want to be able to update/pull changes and have them be live autom
 ```sh
 cd src
 chmod 755 sr* git-secrepo secrepo_tests
+rm *.pyc
 ln -s $PWD/* ~/bin/
 cd ../test/
 secrepo_tests

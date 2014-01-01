@@ -17,6 +17,7 @@ cd secrepo
 ```sh
 cd src
 chmod 755 sr* git-secrepo secrepo_tests
+rm *.pyc
 cp * /usr/local/bin/
 cd ../test/
 secrepo_tests
@@ -27,12 +28,15 @@ Useful if you want to be able to update/pull changes and have them be live autom
 ```sh
 cd src
 # Cygwin python 2.7 may not find modules symlinked into bin
-# in the same way Linux does.
+# in the same way Linux or BSD does.
 ln -s $PWD/secrepo.py /usr/lib/python2.7/site-packages/
+rm *.pyc
 for f in sr* git* secrepo_tests; do
    chmod 755 $f
    ln -s $PWD/$f /usr/local/bin/
 done
+cd ../test
+secrepo_tests
 ```
 
 ## Cygwin Permissions
