@@ -26,7 +26,7 @@
 
 from __future__ import print_function
 import sys,os,subprocess,shlex,hashlib,threading,tempfile,zlib,gzip,shutil
-import binascii
+import binascii,struct
 from getpass import getpass
 from os.path import expanduser,isdir,isfile
 from subprocess import PIPE,CalledProcessError,Popen
@@ -157,6 +157,12 @@ class NoDefaultEncryptionKey(NoKeyAvailable):
   Second arg is underlying exception, if any.'''
   def _report(self):
       return "Default key for encryption not found."
+
+class GunzipFail(DecryptFail):
+  '''Decryption failed because gunzip of the decrypted data failed.
+  Second arg is underlying exception, if any.'''
+  def _report(self):
+      return self.args[0]
 
 class InvalidHeader(DecryptFail):
   '''Exception while handling header. First arg is description.
@@ -495,11 +501,6 @@ def secrepo_cmd(args):
       bourne/posix shell syntax so the eval statement can be used. For
       example: eval `git secrepo -e ....`''')
 
-   ienv_p = sp.add_parser('ienv',
-      help='''Like import (below) but values are imported into
-      temporary environment. Works with bourne/bash/posix
-      style shells. Usage: eval `git-import ienv`''')
-
    import_p = sp.add_parser('import',
       help='''Import keys from export. Input must come from
       stdin (pasted into terminal or directed from file).
@@ -544,6 +545,7 @@ def secrepo_cmd(args):
 
    wipe_p = sp.add_parser('wipe',
       help='''Wipe temporary keys in environment variables.
+      Similar to -e delall.
       Works with bourne/bash/posix style shells.
       Usage: eval `git-secrepo wipe`''')
 
@@ -574,13 +576,12 @@ def secrepo_cmd(args):
       elif	srcmd=='del':		sr_del(cmdargs.key_selector,glob)
       elif	srcmd=='delall':	sr_delall(glob)
       elif	srcmd=='encrypt':	sr_encrypt()
-      elif	srcmd=='export':	sr_export(glob)
-      elif	srcmd=='ienv':		sr_ienv()
-      elif	srcmd=='import':	sr_import(glob)
+      elif	srcmd=='export':	sr_export(sr_scope)
+      elif	srcmd=='import':	sr_import(sr_scope)
       elif	srcmd=='keys':		sr_listkeys()
       elif	srcmd=='log':		sr_log(cmdargs.log_parms)
       elif	srcmd=='name':
-                sr_setname(cmdargs.name[0],cmdargs.name[1],glob)
+                sr_setname(cmdargs.key_selector,cmdargs.key_name,sr_scope)
       elif	srcmd=='new':		sr_new(cmdargs.key_name,glob)
       elif	srcmd=='config':
          if	cmdargs.nosmudge:	sr_nosmudge()
@@ -766,15 +767,17 @@ def normalize_key(ukey):
    # Convert the user enterred password to a 256 bit key.
    return PBKDF2(password=ukey,salt='NoSalt',dkLen=32,count=1000).encode('base64').strip()
 
-def sr_setname(kpat,newname,glob):
+def sr_setname(kpat,newname,scope):
    'Set the name of a key, indicated by name or finger-print'
    if not valid_name(newname):
       warning("Invalid name.")
       return
 
-   # can operate on global or local config
-   if glob:
+   # can operate on global, environment or local config
+   if scope == SR_GLOBAL:
       gr=gconf()
+   elif scope == SR_ENVIRON:
+      gr=srenv()
    else:
       gr=git()
 
@@ -970,13 +973,13 @@ def keys_matching(kdict,s):
          fkeys[k]=kdict[k]
    return fkeys
 
-def sr_export(glob):
-   '''Write keys and names to stdout in format that can be imported.
-   Currently handles only local repo. Environment keys are
-   not considerred.'''
-   # can operate on global or local config
-   if glob:
+def sr_export(scope):
+   '''Write keys and names to stdout in format that can be imported.'''
+   # can operate on global, environment or local config
+   if scope == SR_GLOBAL:
       gr=gconf()
+   elif scope == SR_ENVIRON:
+      gr=srenv()
    else:
       gr=git()
 
@@ -1014,19 +1017,23 @@ def sr_export(glob):
 
    print("# End of export")
 
-def sr_import(glob,to_environ=False):
-   '''Import keys to local repo or environment.
+def sr_import(scope):
+   '''Import keys to local repo, global or environment.
    Note that this will override existing names.'''
-   # can operate on global or local config
-   if to_environ:
+   # can operate on global, environment or local config
+   if scope == SR_GLOBAL:
+      gr=gconf()
+   elif scope == SR_ENVIRON:
       gr=srenv()
    else:
-      if glob:
-         gr=gconf()
-      else:
-         gr=git()
+      gr=git()
 
-   warning("Reading import data from stdin.")
+   if not flags_quiet:
+      if scope == SR_ENVIRON:
+         warning("Note that you must eval this command for environment settings to work.")
+
+      warning("Reading import data from stdin.")
+
    count=0
    errors=0
    ignored=0
@@ -1054,15 +1061,11 @@ def sr_import(glob,to_environ=False):
 
    gr.flush_config()
 
-   warning("Summary: %d keys accepted, %d errors, %d lines ignored." %
-         (count,errors,ignored))
-
-   warning("   Import to %s completed." % gr.cfg_name)
-
-def sr_ienv():
    if not flags_quiet:
-      warning("Note that you must eval this command for environment settings to work.")
-   sr_import(False,to_environ=True)
+      warning("Summary: %d keys accepted, %d errors, %d lines ignored." %
+            (count,errors,ignored))
+
+      warning("   Import to %s completed." % gr.cfg_name)
 
 def sr_listkeys(lmatch=None):
    '''List keys to stdout. Optionally filter by name / finger-print'''
@@ -2196,9 +2199,9 @@ class DecompStat:
   '''Status of the decompressor'''
   def __init__(self):
     self.success=False
-    self.inbytes=0
+    self.inbytes=0	# excluding Gzip suffix ?header
     self.outbytes=0
-    self.exception=None
+    self.error_msg=''
   def record_in(self,dlen):
     self.inbytes = self.inbytes+dlen
   def record_out(self,dlen):
@@ -2206,8 +2209,18 @@ class DecompStat:
   def record_success(self):
     self.success=True
 
+# A couple of utilities (ref: Gzip.py write32u read32)
+def pack32u(value):
+    # The L format writes the bit pattern correctly whether signed
+    # or unsigned.
+    return struct.pack("<L", value)
+
+def unpack32(bindat):
+    return struct.unpack("<I", bindat)[0]
+
 v1_cipher=None
 def cipher(version):
+   'v1 cipher singleton'
    global v1_cipher
    if version == 1:
       if not v1_cipher:
@@ -2232,6 +2245,12 @@ class StreamCipher:
       Optional prefix buffer is processed first.'''
 
       # GzipFile needs a python file object
+      # TODO: replace Gzip with zlib.
+      # See Gzip._write_gzip_header
+      # write('\037\213\010\000\000\000\000\002\377')
+      # We would also have to add the suffix with size and crc, so,
+      # there is probably little value is changing to zlib.
+      #
       if isinstance(outfile,int):
          of = os.fdopen(outfile,'wb')
       else:
@@ -2284,7 +2303,12 @@ class StreamCipher:
       # could just use zlib directly, or, we could write the
       # data to a temporary file first.
 
-      zd = zlib.decompressobj(16+zlib.MAX_WBITS)
+      # Some docs indicate that a negative value should be used
+      # to allow for Gzip header. This is what gzip.py does.
+      # In our case we use a value > 30 which, for some reason
+      # triggers zlib to verify the gzip header and trailing crc and size.
+      # Seriously, I tried it, see fault injection code below.
+      zd = zlib.decompressobj(zlib.MAX_WBITS+16)
 
       try:
          eof=False
@@ -2299,6 +2323,18 @@ class StreamCipher:
 
             # Note amount of input data and detect eof
             if buf:
+               # Fault injection test:
+               #if len(buf) > 8 and len(buf) < 32768:
+               #   # probably EOF
+               #   crc32 = unpack32(buf[-8:-4])
+               #   isize = unpack32(buf[-4:])
+               #   warning("zdata eof crc=%d isize=%d" % (crc32,isize))
+               #   # corrupt the CRC
+               #   # buf=buf[:-8]+'abcd'+buf[-4:]
+               #   # corrupt the length
+               #   buf=buf[:-4]+'abcd'
+               # End fault injection test
+
                stat.record_in(len(buf))
                # decompress the data
                dbuf=zd.decompress(buf)
@@ -2325,7 +2361,7 @@ class StreamCipher:
       except zlib.error as e:
          # Decompression failed, probably because input stream
          # was not correct.
-         stat.exception=e
+         stat.error_msg="zlib.error "+str(e)
 
       finally:
          # If decompress fails for any reason, this should signal to
@@ -2433,8 +2469,7 @@ class StreamCipher:
           debug_log(1,"gunzip did not complete (%d output)" % dstatus.outbytes)
        # It is possible that gunzip failed because the decryption
        # failed. In any case, we are not going to get any useful output.
-       raise DecryptFail('_v1 gunzip outbytes=%d' %
-             dstatus.outbytes,dstatus.exception)
+       raise GunzipFail(dstatus.error_msg)
 
     if dstatus.outbytes == 0:
        if debug_level: debug_log(1,"no output. Input: %d" % dstatus.inbytes)

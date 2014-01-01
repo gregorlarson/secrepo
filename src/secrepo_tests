@@ -1187,6 +1187,26 @@ key: 'importkey4' name: 'ikeyname4'
 
       self.check_leaks()
 
+   def test_key_rename(self):
+      self.pre_leaks()
+      grab_stderr()
+      set_stdin('somekey1\n')
+      somekey1='HyX9HFeIqR2VFUY5Xb7cXE76VrpDt09VgXIxyPKqhLA='
+      sr.secrepo_cmd(['add','name1'])
+      check_stderr()
+      ks = sr.git()._keys
+      # print(ks) #debug
+      self.assertEquals(ks[somekey1],'name1')
+      self.assertEquals(done_stdin(),'')
+      sr.secrepo_cmd(['name','name1','name2'])
+      self.assertEquals(ks[somekey1],'name2')
+
+      self.check_clean()	# flush configs
+      ks = sr.git()._keys
+      self.assertEquals(ks[somekey1],'name2')
+
+      self.check_leaks()
+
    # TODO: add testcases for srdiff_cmd
 
 def count_open_files():
