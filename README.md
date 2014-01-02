@@ -13,6 +13,16 @@ Git is a great tool for tracking changes and synchronizing multiple work-spaces,
 
 SecRepo is designed to mitigate these problems by allowing your bare repo to contain encrypted files that are transparently decrypted in *your* workspace, provided you have the correct keys installed. SecRepo does not prevent someone without the keys from cloning the repo, however, the encrypted files will not be decrypted without the correct keys. Only the encrypted file(s) will exist in that workspace.
 
+## Features
+* data is compressed with zlib prior to encryption.
+* a header with key finger-print and name (comment) and version is added to encrypted files.
+   * allows correct key to be selected during decrypt.
+   * helps identify missing keys.
+   * allows backwards compatibility.
+* Multiple key support with keys stored in a global (per user) or  per-repo config or environment variables.
+* Usable without keys (a summary line is printed for files with missing keys).
+* A 'log' mode that allows header information to be inspected. Allows you to identify unencrypted or encrypted files in commit history.
+
 ## Install
 See platform-specific notes:
    * Linux.md

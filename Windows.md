@@ -9,6 +9,7 @@ The following notes apply to Windows native Git and Python.
 You have probably already done this.
 For reference I use this version which includes and msys bash environment with some basic *nix
 utilities (vim, grep etc).  http://msysgit.github.io/
+* TODO: try PortableGit
 
 ### Install Python for Windows
    * http://python.org/download/
