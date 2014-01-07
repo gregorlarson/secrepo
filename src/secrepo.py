@@ -260,7 +260,7 @@ def debug_log(level,*s):
 
 def warning(*s,**k):
   'Warning messages go to stderr by default but may be redirected'
-  out=" ".join([x.__str__() for x in s])
+  out="".join([x.__str__() for x in s])
   print(out,file=stderr)
   e=k.get('exception')
   if e: print("   Exception:",e,file=stderr)
@@ -1368,22 +1368,25 @@ def srclean_cmd(args):
       # similar to log_mode that treats already encrypted files specially.
       #
       key=None
-      if gr:
-       try:
-         key=find_decryption_key(hcheck.keyfinger,hcheck.keyname)
-         if sr_reset_mode:
-            sr_log_mode=True
+      # If we are using environment default key, don't warn about
+      # encrypted files in working tree.
+      if src != SR_ENVIRON:
+         try:
+            key=find_decryption_key(hcheck.keyfinger,hcheck.keyname)
+            if sr_reset_mode:
+               sr_log_mode=True
 
-         # The following would produce excess output during filter-branch
-         # so we suppress output using flags_quiet which is set implicitly
-         # in the tree-filter (environ GIT_COMMIT).
-         #
-         if not sr_log_mode and not flags_quiet:
-            warning("\nsecrepo: Encrypted file(s) in working tree. You may need to reset --hard")
-            warning("         or, delete the affected files from your working tree, or")
-            warning("         use secrepo decrypt")
-       except NoKeyAvailable:
-         pass
+            # The following would produce excess output during filter-branch
+            # so we suppress output using flags_quiet which is set implicitly
+            # in the tree-filter (environ GIT_COMMIT).
+            #
+            if not sr_log_mode and not flags_quiet:
+               warning(
+  "\nsecrepo: Encrypted file(s) in working tree. You may need to reset --hard\n",
+    "         or, delete the affected files from your working tree, or\n",
+    "         use secrepo decrypt.")
+         except NoKeyAvailable:
+            pass
 
       # Pass the file as-is
       if not sr_log_mode:
