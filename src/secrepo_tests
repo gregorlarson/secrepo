@@ -108,11 +108,11 @@ class UtilityTest(unittest.TestCase):
       if self.editor_saved: return
 
       name=self.new_tmpfile('''#!/bin/sh
-f="$1"
-n="$f.new"
-[ -f "$n" ] && mv -f "$n" "$f"
-touch "$f"
-''')
+ f="$1"
+ n="$f.new"
+ [ -f "$n" ] && mv -f "$n" "$f"
+ touch "$f"
+ ''')
       # rename to something less obscure?
 
       if 'EDITOR' in self.environ:
@@ -380,7 +380,6 @@ class TestSecrepo1(UtilityTest):
         if v in sr.os_environ:
            del sr.os_environ[v]
 
- 
    def check_clean(self):
       '''Check for inconsistancies and prepare for next command.'''
       if sr._git_instance:
@@ -1018,10 +1017,6 @@ class TestSecrepo1(UtilityTest):
    def test_srclean1(self):
       self.pre_leaks()
 
-      # start with no keys
-      allkeys=sr.git().get_keys()
-      sr.git().delete_keys(allkeys)
-
       grab_stderr()
       # With no default key:
       self.assertEquals(sr.srclean_cmd([]),2)
@@ -1032,10 +1027,9 @@ class TestSecrepo1(UtilityTest):
 
       # In order for this to work, there needs to be a
       # 'default' key in the git repo.
-      if not sr.git().get_encryption_key():
-         grab_stderr()
-         sr.sr_new('default',False)	# add default key if it does not already exist
-         # sr.git().set_default_key('default')
+      grab_stderr()
+      sr.sr_new('default',False)
+      # sr.git().set_default_key('default')
 
       dkeys=sr.git().get_keys_named('default')
       self.assertEquals(1,len(dkeys))
@@ -1056,6 +1050,52 @@ class TestSecrepo1(UtilityTest):
       self.stdio_capdone()
 
       self.stdout_results.index("test_srclean1")
+      self.check_leaks()
+
+   # TODO: add a testcase test_srclean2 which checks handling of
+   #       already encrypted input (that is passed as-is, perhaps
+   #       with a warning).
+   def test_srclean2(self):
+      self.pre_leaks()
+      grab_stderr()
+      sr.sr_new('default',False)
+
+      # Use a test file encrypted with different key.
+      efile=open('testfile1','rb')
+      buf = efile.read(3000)
+      efile.close()
+
+      # Test clean filter handling of encrypted data.
+      self.stdio_capture(buf)
+      grab_stderr()
+      self.assertEquals(sr.srclean_cmd([]),0)
+      # We don't expect a warning in this case because already encrypted
+      # input uses a key we don't have.
+      # check_stderr()
+
+      self.stdio_capdone()
+      header = sr.Header(buffer=self.stdout_results)
+      self.assertEquals(header.version, 1)
+      self.assertEquals(header.keyname,'testname1')
+      self.assertEquals(header.keyfinger,'XSvQUytFz5y')
+
+      # Repeat with available key.
+      sr.git().set_key('testingkey1','havekey')
+      self.assertTrue(sr.git().get_keys_matching('XSvQUytFz5y'))
+
+      # This should generate a warning because the input is already
+      # encrypted to a key that we have available.
+      grab_stderr()
+      self.stdio_capture(buf)
+      self.assertEquals(sr.srclean_cmd([]),0)
+      self.stdio_capdone()
+      check_stderr().index('secrepo: Encrypted file')
+
+      header = sr.Header(buffer=self.stdout_results)
+      self.assertEquals(header.version, 1)
+      self.assertEquals(header.keyname,'testname1')
+      self.assertEquals(header.keyfinger,'XSvQUytFz5y')
+
       self.check_leaks()
 
    def test_keys1(self):
@@ -1091,13 +1131,13 @@ class TestSecrepo1(UtilityTest):
       allkeys=gr.get_keys()
       gr.delete_keys(allkeys)
       set_stdin('''
-# comment
-key: 'importkey1' name: 'ikeyname1'
-key: 'importkey2' name: 'ikeyname2'
-key: 'importkey3' name: 'ikeyname3'
-key: 'importkey4' name: 'ikeyname4'
-# comment
-''')
+ # comment
+ key: 'importkey1' name: 'ikeyname1'
+ key: 'importkey2' name: 'ikeyname2'
+ key: 'importkey3' name: 'ikeyname3'
+ key: 'importkey4' name: 'ikeyname4'
+ # comment
+ ''')
       grab_stderr()
       sr.secrepo_cmd(['import'])
       check_stderr()

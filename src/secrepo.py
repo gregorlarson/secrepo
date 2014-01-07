@@ -1315,6 +1315,8 @@ def srclean_cmd(args):
 
    # Other exceptions from this function just fall out to user terminal.
 
+   # Local vars key,name,src now refer to default key for encrypted.
+
    if debug_level:
       debug_log(2,"srclean key='%s' name='%s'" % (key,name))
 
@@ -1340,10 +1342,14 @@ def srclean_cmd(args):
    if inbuf[:8] == 'secrepo ':
       sr_log_mode = False	# logged already
 
+   # hcheck will be a header-object for seeing if the file is
+   # already encrypted.
    hcheck=None
    if len(inbuf) == header_size:
       try:
          hcheck=Header(buffer=inbuf)
+         if debug_level:
+            debug_log(1,"clean already encrypted input (%s)" % hcheck.keyfinger)
       except SrException:
          # header parse failed, so assume not already encrypted.
          pass
@@ -1353,9 +1359,10 @@ def srclean_cmd(args):
       # With less than header_size bytes it can't already be encrypted
       # because there is not a valid header.
 
-   if hcheck:
-      if debug_level:
-         debug_log(1,"clean already encrypted input")
+   if hcheck and src != SR_ENVIRON:
+      # If we are using environment default key, don't warn about
+      # encrypted files in working tree.
+      #
       # We warn the user if we have the key to decrypt this file,
       # but for some reason it is encrypted in the working tree.
       # We can't really fix the problem here because git is using
@@ -1364,31 +1371,25 @@ def srclean_cmd(args):
       # the file unchanged, the files will be identical and git
       # will not check them out again.
       #
-      # Another option is to create a special checkout/reset mode,
-      # similar to log_mode that treats already encrypted files specially.
-      #
-      key=None
-      # If we are using environment default key, don't warn about
-      # encrypted files in working tree.
-      if src != SR_ENVIRON:
-         try:
-            key=find_decryption_key(hcheck.keyfinger,hcheck.keyname)
-            if sr_reset_mode:
-               sr_log_mode=True
+      hkey=None
+      try:
+         hkey=find_decryption_key(hcheck.keyfinger,hcheck.keyname)
+         if sr_reset_mode:
+            sr_log_mode=True
 
-            # The following would produce excess output during filter-branch
-            # so we suppress output using flags_quiet which is set implicitly
-            # in the tree-filter (environ GIT_COMMIT).
-            #
-            if not sr_log_mode and not flags_quiet:
-               warning(
+         # The following would produce excess output during filter-branch
+         # so we suppress output using flags_quiet which is set implicitly
+         # in the tree-filter (environ GIT_COMMIT).
+         #
+         if not sr_log_mode and not flags_quiet:
+            warning(
   "\nsecrepo: Encrypted file(s) in working tree. You may need to reset --hard\n",
     "         or, delete the affected files from your working tree, or\n",
     "         use secrepo decrypt.")
-         except NoKeyAvailable:
-            pass
+      except NoKeyAvailable:
+         pass
 
-      # Pass the file as-is
+      # Pass the file as-is, but in log mode just output a summary line.
       if not sr_log_mode:
          os.write(out_file,inbuf)
       inbuf = os.read(in_file,32768-header_size)	# align
@@ -1400,7 +1401,7 @@ def srclean_cmd(args):
          size = size + len(inbuf)
 
       if sr_log_mode:
-         sr_log_enc(out_file,hcheck.keyname,hcheck.keyfinger,size,key)
+         sr_log_enc(out_file,hcheck.keyname,hcheck.keyfinger,size,hkey)
 
       return 0		# exit 0
 
