@@ -20,8 +20,16 @@ SecRepo is designed to mitigate these problems by allowing your bare repo to con
    * helps identify missing keys.
    * allows backwards compatibility.
 * Multiple key support with keys stored in a global (per user) or  per-repo config or environment variables.
+   * flexible key management commands.
+   * naming of keys to make management easier.
 * Usable without keys (a summary line is printed for files with missing keys).
 * A 'log' mode that allows header information to be inspected. Allows you to identify unencrypted or encrypted files in commit history.
+* Portable implementation in Python 2.7
+   * runs on Linux, Windows, Cygwin and BSD.
+* Support for in-place editing and decryption of encrypted files in case some files were checked-out encrypted.
+* Support for history re-writing in order to create an encrypted or decrypted branch.
+* Self-test using Python's excellent unit-testing framework.
+   * reasonably good coverage, but I will need to add more test-cases. 
 
 ## Install
 See platform-specific notes:
