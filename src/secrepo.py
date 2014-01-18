@@ -630,7 +630,7 @@ def config_status(gr):
 
    v = gr.getconfig('diff.private.textconv')
    if v == 'sr_diff':
-      warning("   Temporary decryption enabled, diff.private.textconf "+v)
+      warning("   Temporary decryption enabled, diff.private.textconv "+v)
    else:
       warning("   Temporary decryption disabled.")
 
