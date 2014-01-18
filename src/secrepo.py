@@ -1338,6 +1338,16 @@ def srclean_cmd(args):
    # not have a header.
    inbuf=os.read(in_file,header_size)
 
+   # Git appears to handle zero-length files specially, such
+   # that if we get zero bytes into our filter, we should just
+   # output zero bytes and succeed, otherwise, Git may say that
+   # the working tree is modified, even if it is not.
+   if len(inbuf) == 0:
+      if debug_level:
+         debug_log(1,"srclean zero length input.")
+
+      return 0
+
    # This is not the header, it is a log mode hack
    if inbuf[:8] == 'secrepo ':
       sr_log_mode = False	# logged already
@@ -1493,6 +1503,17 @@ def smudge_filter(in_file,out_file):
    gr = git()
 
    inbuf = os.read(in_file, header_size)
+
+   # Note that zero length files are not encrypted or decrypted.
+   # We simply return success with zero length output. This is
+   # what Git seems to like. There is similar logic in srclean_cmd.
+   #
+   if len(inbuf) == 0:
+      if debug_level:
+         debug_log(1,"smudge zero length input.")
+
+      return 0
+
    if inbuf[:8] == 'secrepo ':
       sr_log_mode = False	# logged already
 
