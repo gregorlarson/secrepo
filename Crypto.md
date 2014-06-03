@@ -28,7 +28,7 @@ I am using the openssl compatible password hash (without salt) rather than a mor
 
 If you are using the recommended 256bit base64 passwords then more modern password hashing will not make much difference. The modern key derivation functions (PBKDF2, SCrypt) try and make shorter memorable passwords more secure by making the key-derivation slower.
 
-SecRepo currently allows short memorable passwords to be used vi the 'add' command, however, those passwords are normalized with PBKDF2 from PyCrypto ( `Crypto.Protocol.KDF.PBKDF2` ).
+SecRepo currently allows short memorable passwords to be used via the 'add' command, however, those passwords are normalized with PBKDF2 from PyCrypto ( `Crypto.Protocol.KDF.PBKDF2` ).
 
 References:
    * http://en.wikipedia.org/wiki/Key_derivation_function
@@ -66,11 +66,11 @@ def derive_key_and_iv(password, salt, key_length, iv_length):
     return d[:key_length], d[key_length:key_length+iv_length]
 ```
 
-Using the same key and iv derivation as openssl has the advantage of compatibility. OpenSSL is mature and been around a long time where as SecRepo and PyCrypto are much more recent with smaller design and user communities. Because a Git repo history can have a very long lifespan, it is valuable that files be accessible with independently developed tools.
+Using the same key and iv derivation as openssl has the advantage of compatibility. OpenSSL is mature and has been around a long time where as SecRepo and PyCrypto are much more recent with smaller design and user communities. Because a Git repo history can have a very long lifespan, it is valuable that files be accessible with independently developed tools.
 For example, you can decrypt a SecRepo encrypted file with openssl by stripping the
 64 byte header and using the openssl program and gzip:
 ```sh
 dd bs=16 skip=4 if=encrypted_file | openssl aes-256-cbc -nosalt -d | gunzip > clear_file
 ```
 The password you would provide to openssl in the above example is the password you see in
-`{gitdir}/secrepo` or `~/secrepo` or `git-secrepo [-g] export` (without quotations).
+`{gitdir}/secrepo` or `~/.secrepo` or `git-secrepo [-g] export` (without quotations).
