@@ -2885,7 +2885,7 @@ def decrypt_file(filename):
    Return 0 for success.
    Return 1 for error.
    Return 2 for not encrypted.
-   Return 3 for not a pla file (symlink)'''
+   Return 3 for not a plain file (symlink)'''
 
    tmp=filename+'.tmp'
 
