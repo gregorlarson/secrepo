@@ -2768,8 +2768,11 @@ def sr_encrypt():
    touched=0
    encrypted=0
    for x in sys.stdin.readlines():
-      filename=x.strip()	# readlines puts \n on the end?
-      if filename:	# skip blank lines
+      qfilename=x.strip()	# readlines puts \n on the end?
+      if qfilename:	# skip blank lines
+         # ls-files may quote and escape chars, undo this.
+         # Another option would be to require ls-files -z
+         filename=c_style_unescape(qfilename)
          try:
             if not os.path.islink(filename):
                if file_is_encrypted(filename):
