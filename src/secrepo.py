@@ -2835,23 +2835,26 @@ def sr_decrypt(filename):
 
    missing_keys=dict()
    for x in sys.stdin.readlines():
-      filename=x.strip()	# readlines puts \n on the end?
-      if filename:	# skip blank lines
-       try:
-         rc = decrypt_file(filename)
-         if rc == 0:
-            success +=1
-         elif rc == 2:
-            not_encrypted +=1
-         elif rc == 3:
-            ignored +=1
-         else:
-            errors +=1
+      qfilename=x.strip()	# readlines puts \n on the end?
+      if qfilename:		# skip blank lines
+         # ls-files may quote and escape chars, undo this.
+         # Another option would be to require ls-files -z
+         filename=c_style_unescape(qfilename)
+         try:
+           rc = decrypt_file(filename)
+           if rc == 0:
+              success +=1
+           elif rc == 2:
+              not_encrypted +=1
+           elif rc == 3:
+              ignored +=1
+           else:
+              errors +=1
 
-       except NoKeyAvailable as e:
-         missing_keys[e.args[2]]=e.args[0]
-         missing_key +=1
-         if not flags_quiet: warning("Missing key for "+filename)
+         except NoKeyAvailable as e:
+           missing_keys[e.args[2]]=e.args[0]
+           missing_key +=1
+           if not flags_quiet: warning("Missing key for "+filename)
 
    if not flags_quiet:
       warning("Completed decryption operation:")
@@ -2867,12 +2870,19 @@ def sr_decrypt(filename):
          for k in missing_keys:
             warning(form % ('',missing_keys[k],create_keyfinger(k)))
 
+# copied from:
+# https://github.com/felipec/git-remote-hg/blob/master/git-remote-hg
+def c_style_unescape(string):
+    if string[0] == string[-1] == '"':
+       return string.decode('string-escape')[1:-1]
+    return string
+
 def decrypt_file(filename):
    '''Decrypt a file in-place.
    Return 0 for success.
    Return 1 for error.
    Return 2 for not encrypted.
-   Return 3 for not a plain file (symlink)'''
+   Return 3 for not a pla file (symlink)'''
 
    tmp=filename+'.tmp'
 
