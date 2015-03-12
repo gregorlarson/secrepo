@@ -28,7 +28,8 @@ I am using the openssl compatible password hash (without salt) rather than a mor
 
 If you are using the recommended 256bit base64 passwords then more modern password hashing will not make much difference. The modern key derivation functions (PBKDF2, SCrypt) try and make shorter memorable passwords more secure by making the key-derivation slower.
 
-SecRepo currently allows short memorable passwords to be used via the 'add' command, however, those passwords are normalized with PBKDF2 from PyCrypto ( `Crypto.Protocol.KDF.PBKDF2` ).
+SecRepo currently allows short memorable passwords to be used via the 'add' command, however, those passwords are normalized or *stretched* with PBKDF2 from PyCrypto ( `Crypto.Protocol.KDF.PBKDF2` ). An attacker looking at your
+srconfig file should *not* be able to tell if the password stored there is random or derived from a shorter pass-phrase, however, PBKDF2 is used with non-random salt and a fixed number of iterations, which could allow for some password cracking (guessing).
 
 References:
    * http://en.wikipedia.org/wiki/Key_derivation_function
