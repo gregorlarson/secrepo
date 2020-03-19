@@ -117,10 +117,8 @@ class SrException(UserWarning):
       if len(self.args) > 1:
           if self.args[1]:
              note=note+"\n   exception:"+self.args[1].__str__()
-      if note:
-         warning(self._report()+' '+note)
-      else:
-         warning(self._report())
+
+      warning(" ".join([t for t in [self._report(),note] if t]))
 
   def _report(self):
       'should be overridden below'
