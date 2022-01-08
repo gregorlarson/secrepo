@@ -31,9 +31,14 @@ from getpass import getpass
 from os.path import expanduser,isdir,isfile
 from subprocess import PIPE,CalledProcessError,Popen
 from base64 import b32encode,b64encode,b64decode
-from Cryptodome.Cipher import AES
-from Cryptodome.Hash import SHA256
-from Cryptodome.Protocol.KDF import PBKDF2
+try:
+    from Cryptodome.Cipher import AES
+    from Cryptodome.Hash import SHA256
+    from Cryptodome.Protocol.KDF import PBKDF2
+except:
+    from Crypto.Cipher import AES
+    from Crypto.Hash import SHA256
+    from Crypto.Protocol.KDF import PBKDF2
 
 #
 # Global values and Utility Flags
@@ -1455,7 +1460,7 @@ def sr_log_unenc(out_file,size):
    'Report on unencrypted file to output stream. Used for log_mode.'
    os.write(out_file,"secrepo unencrypted size=%d\n" % size)
 
-def srsmudge_cmd(args):
+def srsmudge_cmd(args,check_only=False):
    '''sr_smudge command, parse header and decrypt, stdin to stdout.'''
    global sr_log_mode
 
@@ -1474,7 +1479,10 @@ def srsmudge_cmd(args):
    if debug_level:
       debug_log(2,"srmudge_cmd in=%d, out=%d" % (in_fn,out_fn))
    try:
-      smudge_filter(in_fn,out_fn)
+      rc = smudge_filter(in_fn,out_fn,check_only)
+      if check_only:
+         if not rc:
+            return 1 # exit 1
       return 0			# exit 0 to git
 
    except NoKeyAvailable as e:
@@ -1490,7 +1498,7 @@ def srsmudge_cmd(args):
       e.report()
       return 2
 
-def smudge_filter(in_file,out_file):
+def smudge_filter(in_file,out_file,check_only=False):
    '''Filter input to output, decrypt and decompress if possible.
    If a header is present, but no key is available, raise an
    exception. If decryption or decompression fails and exception
@@ -1521,10 +1529,13 @@ def smudge_filter(in_file,out_file):
       if sr_log_mode:
          # In special log mode, we output only a summary line.
          sr_log_unenc(out_file,len(inbuf))
+         # We did not actually decrypt, however, because this is a special
+         # log mode, return True anyways:
          return True
 
       # No header, so just pass contents as-is
-      os.write(out_file,inbuf)
+      if not check_only:
+         os.write(out_file,inbuf)
       return False		# no decryption was done
 
    # The file is large enough to include a header.
@@ -1539,10 +1550,12 @@ def smudge_filter(in_file,out_file):
    if not header:
       # If no header was seen, the input is not encrypted.
       if debug_level: debug_log(1,"smudge unencrypted input")
+      if check_only: return False
       size = len(inbuf)
       if not sr_log_mode:
-         # pass the file as-is
-         os.write(out_file,inbuf)
+         if not check_only:
+            # pass the file as-is
+            os.write(out_file,inbuf)
 
       inbuf = os.read(in_file,32768-header_size)	# align
       size = size + len(inbuf)
@@ -1561,6 +1574,8 @@ def smudge_filter(in_file,out_file):
 
    # The file included a valid header so we must try and handle it
    # or raise an exception.
+   if check_only: return True
+
    #
    # Using the key fingerprint from the header we will try
    # and get the key.
@@ -1818,7 +1833,10 @@ def gitdir():
    if not os.path.isdir(git_dir):
       raise GitFail('cannot access git dir: '+self.git_dir)
 
-   return git_dir.decode()
+   try:
+      return git_dir.decode()
+   except:
+      return git_dir
 
 # SrEnv singleton
 _srenv_instance=None
@@ -2616,7 +2634,10 @@ def _readerthread(fh, buffer):
 # 80 bits (10 bytes) unique value to identify correct key.
 # Another 48 bits (6 bytes) of key data is added to this
 # in order to make a 16 byte (128 bit) AES block.
-key_check_val=bytes.fromhex('34486745608c9cd13864')
+try:
+    key_check_val=bytes.fromhex('34486745608c9cd13864')
+except:
+    key_check_val=str.decode('34486745608c9cd13864','hex')
 
 def create_keyfinger(password):
     '''Create a key fingerprint that can be used to check a given key is
