@@ -370,7 +370,10 @@ def srdiff_cmd(args,check_only):
           if not rc:
              return 1
        return 0		# exit 0
-    except SrException:
+    except SrException as e:
+       if debug_level:
+          debug_log(2,f"srdiff e: {e}")
+
        # Pass this exception because we will try and output
        # some substitute below. TODO: debug output?
        pass
@@ -1442,11 +1445,11 @@ def sr_log(parms):
 def sr_log_enc(outfile,keyname,finger,size,key):
    'Report on encrypted file to output stream. Used for log_mode.'
    if key:
-      os.write(outfile,"secrepo encrypted (%s) '%s' size=%d\n" %
-           (keyname, finger, size))
+      s=f"secrepo encrypted ({keyname}) '{finger}' size={size}\n"
    else:
-     os.write(outfile,"secrepo encrypted unavailable key (%s) '%s' size=%d\n" %
-           (keyname, finger, size))
+     s=f"secrepo encrypted unavailable key ({keyname}) '{finger}' size={size}\n"
+
+   os.write(outfile,s.encode())
 
 def sr_drain_log_enc(infile,outfile,keyname,finger,key):
    'Drain input stream, note size and log_enc'
@@ -1524,9 +1527,16 @@ def smudge_filter(in_file,out_file,check_only=False):
          debug_log(1,"smudge zero length input.")
 
       return 0
+   else:
+      if debug_level:
+         debug_log(2,f"smudge len={len(inbuf)}")
 
    if inbuf[:8] == 'secrepo ':
-      sr_log_mode = False	# logged already
+      sr_log_mode = False   # logged already
+      debug_log(2,f"smudge sr_log_mode False")
+   else:
+      if debug_level:
+         debug_log(2,f"smudge inbuf:8='{inbuf[:8]}'")
 
    if len(inbuf) < header_size:
       if debug_level:
@@ -1541,13 +1551,15 @@ def smudge_filter(in_file,out_file,check_only=False):
       # No header, so just pass contents as-is
       if not check_only:
          os.write(out_file,inbuf)
-      return False		# no decryption was done
+      return False      # no decryption was done
 
    # The file is large enough to include a header.
    header=None
    try:
       header=Header(buffer=inbuf)
-   except SrException:
+   except SrException as e:
+      if debug_level:
+         debug_log(2,f"smudge no header: {e}")
       # pass this error unreported because we can handle as
       # unencrypted input.
       pass
@@ -2549,8 +2561,8 @@ class StreamCipher:
    def derive_key_and_iv(self, password, key_length, iv_length):
       '''Create key and iv from password without salt. Note that this does
       not appear as strong as some newer mechanisms, however, it is compatible
-      with openssl.'''
-      d = d_i = ''
+      with openssl. password is bytes, output is bytes.'''
+      d = d_i = b''
       while len(d) < key_length + iv_length:
         d_i = hashlib.md5(d_i + password).digest()
         d += d_i
@@ -2560,6 +2572,8 @@ class StreamCipher:
       '''Encrypt a stream, output in openssl aes-256-cbc compatible form.'''
       bs = AES.block_size
       key, iv = self.derive_key_and_iv(password, key_length, bs)
+      debug_log(2,f"encrypt: {password} key: {key} iv: {iv}")
+
       cipher = AES.new(key, AES.MODE_CBC, iv)
       finished = False
       while not finished:
@@ -2579,7 +2593,7 @@ class StreamCipher:
             # added, even if this requires adding an additional
             # block.
             padding_length = bs - (len(chunk) % bs)
-            chunk += padding_length * chr(padding_length)
+            chunk += padding_length * chr(padding_length).encode()
             finished = True
 
          if isinstance(out_file,int):
@@ -2590,9 +2604,11 @@ class StreamCipher:
    def aes_decrypt(self, in_file, out_file, password, key_length=32):
       '''Decrypt a stream in openssl aes-256-cbc form.'''
       bs = AES.block_size
-      key, iv = self.derive_key_and_iv(password, key_length, bs)
+      p=password.encode()   # password is string
+      key, iv = self.derive_key_and_iv(p, key_length, bs)
+      debug_log(2,f"decrypt: {password} key: {key.hex()} iv: {iv.hex()}")
       cipher = AES.new(key, AES.MODE_CBC, iv)
-      next_chunk = ''
+      next_chunk = b''
       finished = False
       while not finished:
          chunk = next_chunk
@@ -2610,7 +2626,7 @@ class StreamCipher:
          if len(next_chunk) == 0:
             # Look at the last byte of the last chunk to
             # determine the amount of padding to be removed.
-            pad_len = ord(chunk[-1])
+            pad_len = chunk[-1]
             if pad_len < 1 or pad_len > bs:
                # Padding length should be 1..bs
                debug_log(1,"padding_length: %d" % pad_len)
@@ -2620,7 +2636,7 @@ class StreamCipher:
             # I am deleting are equal to chunk[-1]
             # This is probably similar to the bad magic number
             # error from the openssl program.
-            if chunk[-pad_len:] != (pad_len * chr(pad_len)):
+            if chunk[-pad_len:] != (pad_len * chr(pad_len).encode()):
                raise DecryptFail("aes_decrypt pad check failed.")
 
             chunk = chunk[:-pad_len]	# delete pad bytes
@@ -2652,22 +2668,23 @@ def create_keyfinger(password):
     for inclusion in header. I don't want to put the entire 256 bits
     into the header, in part to save space but also to reduce the
     exposure on the key.'''
-    return SHA256.new(password+'This is SecRepo transparent Git encryption.').digest().encode('base64')[:11]
+    return b64encode(SHA256.new(password.encode()+b'This is SecRepo transparent Git encryption.').digest())[:11]
 
 def slow_keyfinger(password, key_length=32):
     '''Create a 128 bit block (16 byte) key fingerprint that can be
     used to check a given key is correct. This value can be included
     in the Header to allow checking of keys before payload decryption
-    is attempted.
-    Returned value is b64 encoded and trimmed to 66 bits (11 chars)
+    is attempted. password is a string.
+    Returned value is b64 encoded and trimmed to 66 bits (11 bytes)
     for inclusion in header. I don't want to put the entire 128 bits
     into the header, in part to save space but also to reduce the
     exposure on the key.'''
-    if len(password) < 6:
+    p=password.encode()
+    if len(p) < 6:
        raise SrException("Password is less than 6 chars")
-    key, iv = cipher(1).derive_key_and_iv(password, key_length, AES.block_size)
+    key, iv = cipher(1).derive_key_and_iv(p, key_length, AES.block_size)
     aes = AES.new(key, AES.MODE_CBC, iv)
-    return b64encode(aes.encrypt(key_check_val+password[:6]))[:11]
+    return b64encode(aes.encrypt(key_check_val+p[:6]))[:11]
 
 def try_keys(kdict,finger):
    '''Try each key in dict against some check_data.
@@ -2764,8 +2781,10 @@ class Header:
 
      try:
         hdata = buf.split()
+        if debug_level:
+           debug_log(2,f"populate hdata: {hdata}")
         
-        if (len(hdata) != 4) or (hdata[0] != '{SecREPO}'):
+        if (len(hdata) != 4) or (hdata[0] != b'{SecREPO}'):
            raise InvalidHeader('No valid prefex')
 
         v = int(hdata[1])
