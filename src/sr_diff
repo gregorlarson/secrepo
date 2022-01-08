@@ -3,5 +3,5 @@ import sys, secrepo
 #
 # All the logic is in the secrepo module.
 #
-rc = secrepo.srdiff_cmd(sys.argv[1:])
+rc = secrepo.srdiff_cmd(sys.argv[1:],False)
 sys.exit(rc)

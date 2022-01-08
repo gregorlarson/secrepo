@@ -333,7 +333,7 @@ def sredit_cmd(args):
 
     return 0	# exit 0
 
-def srdiff_cmd(args):
+def srdiff_cmd(args,check_only):
     '''sr_diff command.
     This takes an encrypted temp-file and outputs decrypted data.
     If decryption is not possible (due to missing keys), then a
@@ -363,9 +363,12 @@ def srdiff_cmd(args):
        msvcrt.setmode(out_file, os.O_BINARY)
 
     if debug_level:
-       debug_log(2,'srdiff_cmd %s -> %d' % (cmdargs.file, out_file), cmdargs)
+       debug_log(2,'srdiff_cmd %s -> %d co:%s' % (cmdargs.file, out_file, check_only), cmdargs)
     try:
-       smudge_filter(fn,out_file)
+       rc = smudge_filter(fn,out_file,check_only)
+       if check_only:
+          if not rc:
+             return 1
        return 0		# exit 0
     except SrException:
        # Pass this exception because we will try and output
@@ -373,6 +376,8 @@ def srdiff_cmd(args):
        pass
     finally:
        os.close(fn)
+
+    if check_only: return 1 # not sr-encrypted
 
     # If we cannot decrypt the file, we revert to a
     # semi-symbolic mode: version, keyname, finger, size
@@ -1460,7 +1465,7 @@ def sr_log_unenc(out_file,size):
    'Report on unencrypted file to output stream. Used for log_mode.'
    os.write(out_file,"secrepo unencrypted size=%d\n" % size)
 
-def srsmudge_cmd(args,check_only=False):
+def srsmudge_cmd(args,check_only):
    '''sr_smudge command, parse header and decrypt, stdin to stdout.'''
    global sr_log_mode
 
@@ -1477,7 +1482,7 @@ def srsmudge_cmd(args,check_only=False):
       msvcrt.setmode(out_fn, os.O_BINARY)
 
    if debug_level:
-      debug_log(2,"srmudge_cmd in=%d, out=%d" % (in_fn,out_fn))
+      debug_log(2,"srsmudge_cmd in=%d, out=%d" % (in_fn,out_fn))
    try:
       rc = smudge_filter(in_fn,out_fn,check_only)
       if check_only:
