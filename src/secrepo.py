@@ -2593,7 +2593,7 @@ class StreamCipher:
             # added, even if this requires adding an additional
             # block.
             padding_length = bs - (len(chunk) % bs)
-            chunk += padding_length * chr(padding_length).encode()
+            chunk += bytes(padding_len * [padding_len])
             finished = True
 
          if isinstance(out_file,int):
@@ -2636,7 +2636,7 @@ class StreamCipher:
             # I am deleting are equal to chunk[-1]
             # This is probably similar to the bad magic number
             # error from the openssl program.
-            if chunk[-pad_len:] != (pad_len * chr(pad_len).encode()):
+            if chunk[-pad_len:] != bytes(pad_len * [pad_len]):
                raise DecryptFail("aes_decrypt pad check failed.")
 
             chunk = chunk[:-pad_len]	# delete pad bytes
