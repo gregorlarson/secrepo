@@ -2592,7 +2592,7 @@ class StreamCipher:
             # decrypting. Note that there is always some padding
             # added, even if this requires adding an additional
             # block.
-            padding_length = bs - (len(chunk) % bs)
+            padding_len = bs - (len(chunk) % bs)
             chunk += bytes(padding_len * [padding_len])
             finished = True
 
